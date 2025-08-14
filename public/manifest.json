@@ -1,0 +1,39 @@
+{
+  "name": "CrossSync",
+  "short_name": "CrossSync",
+  "description": "CrossSync - 跨平台文件同步传输工具，支持iPhone和Windows间快速安全的文件传输",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#007bff",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "categories": ["utilities", "productivity"],
+  "screenshots": [
+    {
+      "src": "screenshot-mobile.png",
+      "sizes": "320x568",
+      "type": "image/png",
+      "form_factor": "narrow"
+    },
+    {
+      "src": "screenshot-desktop.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide"
+    }
+  ]
+}

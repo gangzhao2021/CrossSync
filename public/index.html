@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrossSync</title>
+    <meta name="description" content="CrossSync - 跨平台文件同步传输工具，支持iPhone和Windows间快速安全的文件传输">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="background-transfer-styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <!-- PWA支持 -->
+    <meta name="theme-color" content="#007bff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="CrossSync">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔄 CrossSync</h1>
+            <p>跨平台文件同步传输工具</p>
+        </header>
+        
+        <main>
+            <section class="device-info">
+                <div class="device-card">
+                    <div class="device-icon">📱</div>
+                    <div class="device-name" id="deviceName">正在识别设备...</div>
+                    <div class="device-status" id="deviceStatus">离线</div>
+                </div>
+            </section>
+
+            <section class="connection-area" id="connectionArea">
+                <div class="connection-status" id="connectionStatus">
+                    等待连接其他设备...
+                </div>
+                <!-- 连接控制按钮 -->
+                <div class="connection-controls" id="connectionControls" style="display: none;">
+                    <button class="btn-primary" id="reconnectBtn" onclick="app.manualReconnect()">
+                        🔄 重新连接
+                    </button>
+                    <button class="btn-secondary" id="resetBtn" onclick="app.resetConnection()">
+                        🔄 重置连接
+                    </button>
+                </div>
+                <div class="qr-code-container" id="qrContainer">
+                    <!-- QR码将在这里显示 -->
+                </div>
+                <div class="connection-id">
+                    房间ID: <span id="roomId">-</span>
+                </div>
+                <!-- 后台传输提示 -->
+                <div class="background-transfer-tip" id="backgroundTip" style="display: none;">
+                    <div class="tip-icon">📱</div>
+                    <div class="tip-content">
+                        <h4>💡 后台传输提示</h4>
+                        <p>传输大文件时，请：</p>
+                        <ul>
+                            <li>保持浏览器在前台或后台运行</li>
+                            <li>不要关闭浏览器标签页</li>
+                            <li>避免手机进入深度睡眠模式</li>
+                            <li>传输完成后会有通知提示</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section class="devices-list" id="devicesList" style="display: none;">
+                <h3>可连接设备</h3>
+                <div class="devices-container" id="devicesContainer">
+                    <!-- 动态添加设备 -->
+                </div>
+            </section>
+
+            <section class="file-transfer" id="fileTransfer" style="display: none;">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <h3>选择要传输的文件</h3>
+                    <p class="upload-hint">支持多个文件同时传输</p>
+                    <input type="file" id="fileInput" multiple accept="*/*" style="display: none;">
+                    <button class="btn-primary btn-large" id="selectBtn">
+                        📱 选择文件
+                    </button>
+                </div>
+                
+                <div class="progress-area" id="progressArea" style="display: none;">
+                    <div class="progress-item">
+                        <div class="progress-info">
+                            <span class="file-name" id="fileName">文件名</span>
+                            <span class="progress-text" id="progressText">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="received-files" id="receivedFiles" style="display: none;">
+                <h3>接收的文件</h3>
+                <div class="files-list" id="filesList">
+                    <!-- 接收的文件列表 -->
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>支持所有现代浏览器 • 基于WebRTC技术</p>
+            <div class="help-links">
+                <a href="#" id="helpBtn">使用帮助</a>
+                <a href="#" id="aboutBtn">关于</a>
+            </div>
+        </footer>
+    </div>
+
+    <!-- 模态框 -->
+    <div class="modal" id="helpModal">
+        <div class="modal-content">
+            <span class="close" id="closeHelp">&times;</span>
+            <h2>使用帮助</h2>
+            <div class="help-content">
+                <h3>如何使用：</h3>
+                <ol>
+                    <li>确保两个设备连接到同一WiFi网络</li>
+                    <li>在iPhone上打开Safari浏览器访问此页面</li>
+                    <li>在Windows电脑上打开浏览器访问此页面</li>
+                    <li>等待设备发现，点击要连接的设备</li>
+                    <li>选择文件并发送</li>
+                </ol>
+                <h3>支持的文件类型：</h3>
+                <p>支持所有文件类型，包括图片、视频、文档、音频等</p>
+                <h3>安全性：</h3>
+                <p>文件直接在设备间传输，不经过服务器存储</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
