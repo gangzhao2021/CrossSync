@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrossSync - QR</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>CrossSync</h1>
+    <p>用 iPhone 扫描下方二维码，在同一局域网内访问：</p>
+    <div class="qr">
+      <img src="/qr.png?sid={{ sid }}" alt="QR" />
+    </div>
+    <p class="muted">或在 Safari 打开：<code>{{ lan_url }}</code></p>
+    {% if otp_enabled %}
+    <p>一次性访问码：<strong>{{ otp }}</strong></p>
+    {% endif %}
+    <p><a class="btn" href="{{ lan_url }}">打开 Web 应用</a></p>
+    <p class="muted">提示：手机扫码后，本页面将自动跳转到 Web 应用。</p>
+  </div>
+  <script>
+    const sid = "{{ sid }}";
+    const redirectUrl = "{{ lan_url }}";
+    try {
+      const es = new EventSource(`/api/sse/${sid}`);
+      es.onmessage = (e) => {
+        if (e.data === 'scanned') {
+          es.close();
+          window.location.href = redirectUrl;
+        }
+      };
+    } catch (e) {}
+  </script>
+</body>
+</html>

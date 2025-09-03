@@ -1,14 +1,21 @@
-# dependencies
-node_modules/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
 
-# tools/cache
-.tools/
+# Local data and temp
+data/
+*.zip
+*.log
 
-# logs
-npm-debug.log*
-yarn-error.log*
+# VSCode/IDE
+.vscode/
+.idea/
 
-# OS
-.DS_Store
+# OS files
 Thumbs.db
-
+.DS_Store

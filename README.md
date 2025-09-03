@@ -1,99 +1,47 @@
-# CrossSync
+CrossSync — LAN file transfer between iPhone (Safari) and Windows
 
-CrossSync 是一个基于WebRTC技术的跨平台文件同步传输工具，支持iPhone、Android和Windows间快速安全的文件传输。
+Overview
 
-## ✨ 主要特性
+- Windows runs a local FastAPI web server accessible on LAN.
+- iPhone opens the web UI by scanning a QR code.
+- Bidirectional transfer:
+  - Send to PC: iPhone uploads files via resumable/chunked upload.
+  - Send to iPhone: Windows user (or any desktop browser) uploads into Outbox; iPhone downloads them.
+- Large files supported (10s of GB) via chunked upload and streaming download.
+- Drag-and-drop multi-file upload (folder drop on desktop), progress with speed/ETA, and auto cleanup of stale temp files.
 
-- 🚀 **快速传输**: 基于WebRTC P2P技术，直接设备间传输
-- 🔒 **安全可靠**: 文件不经过服务器，端到端传输
-- 📱 **跨平台**: 支持iPhone、Android、Windows、Mac
-- 💤 **断线重连**: 支持熄屏后自动重连和传输续传
-- 🔄 **多文件**: 支持同时传输多个文件
-- 📊 **实时进度**: 显示传输进度和状态
-- 🌐 **无需安装**: 基于浏览器，无需安装额外软件
+Quick Start
 
-## 🚀 快速开始
+1) Create venv and install deps:
 
-### 1. 安装依赖
+   python -m venv .venv
+   .venv/Scripts/activate  # Windows PowerShell: .venv\\Scripts\\Activate.ps1
+   pip install -r requirements.txt
 
-确保已安装 [Node.js](https://nodejs.org)，然后运行：
+2) Run server:
 
-```bash
-npm install
-```
+   python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 
-### 2. 启动服务器
+   Or use run.ps1 which prints the local URL and opens a QR page.
 
-双击运行 `start.bat` 文件，或者在命令行中运行：
+3) On Windows, open http://127.0.0.1:8008 and scan the QR code with iPhone.
 
-```bash
-node server/server.js
-```
+Options
 
-### 3. 连接设备
+- OTP gate: `./run.ps1 -EnableOtp` (optional `-OtpCode 123456`)
+- HTTPS: `./run.ps1 -Https` (requires `certs/cert.pem` + `certs/key.pem`)
+- Port: `./run.ps1 -Port 8010`
 
-- **电脑**: 打开浏览器访问 `http://localhost:3010`
-- **手机**: 连接同一WiFi网络，访问显示的IP地址（如 `http://192.168.1.100:3010`）
+Default Paths
 
-## 📱 使用方法
+- Downloads (iPhone -> PC): data/downloads
+- Outbox (PC -> iPhone):    data/outbox
+- Temp (chunks):            data/temp
 
-1. **创建房间**: 在一台设备上创建传输房间
-2. **加入房间**: 其他设备扫描二维码或输入房间ID加入
-3. **建立连接**: 等待设备自动连接
-4. **传输文件**: 选择文件开始传输
+Notes
 
-## 🔧 网络问题解决
-
-如果手机无法连接：
-
-1. **检查防火墙**: 确保Windows防火墙允许端口3010
-2. **检查WiFi**: 确保所有设备在同一WiFi网络
-3. **检查路由器**: 某些路由器有AP隔离功能，需要关闭
-
-## 📁 项目结构
-
-```
-CrossSync/
-├── start.bat              # 快速启动脚本
-├── server/
-│   └── server.js          # Node.js服务器
-├── public/
-│   ├── index.html         # 主页面
-│   ├── app.js            # 客户端逻辑
-│   ├── styles.css        # 样式文件
-│   └── manifest.json     # PWA配置
-└── package.json          # 项目配置
-```
-
-## 🛠 技术栈
-
-- **前端**: HTML5, CSS3, JavaScript (ES6+)
-- **后端**: Node.js, Express, Socket.IO
-- **通信**: WebRTC (数据通道), Socket.IO (信令)
-- **特性**: PWA支持, Service Worker
-
-## 🔄 更新日志
-
-### v2.0.0 (最新版本)
-
-- ✅ 重构移动端界面，更适配手机操作
-- ✅ 移除拖拽功能，专注触摸体验
-- ✅ 优化按钮大小和触摸区域
-- ✅ 改进断线重连机制
-- ✅ 支持传输状态恢复
-- ✅ 清理测试代码，简化项目结构
-- ✅ 新增简洁的启动脚本
-
-## 📄 许可证
-
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
-## 🤝 贡献
-
-欢迎提交Issue和Pull Request来改进项目！
-
-## 💡 提示
-
-- 传输大文件时建议保持设备电量充足
-- 可以将页面添加到手机主屏幕作为PWA应用使用
-- 支持后台传输，但建议保持浏览器标签页打开
+- iOS Safari may not support folder drag-and-drop; multiple file selection works.
+- No authentication is enabled by default. Consider using trusted LAN only.
+- Pause/Resume: Available per-file during upload. Cancelling keeps uploaded chunks for later resume.
+- ZIP download: Outbox supports “Download all” or selected files as ZIP.
+- Open-on-finish: Toggle in “发送到电脑” to auto-open folder after upload (Windows only).

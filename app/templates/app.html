@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrossSync</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>CrossSync</h1>
+      <nav>
+        <button id="tab-upload" class="tab active">发送到电脑</button>
+        <button id="tab-outbox" class="tab">发送到 iPhone</button>
+      </nav>
+    </header>
+
+    <section id="panel-upload">
+      <div class="dropzone" id="dropzone-upload">
+        <p>拖拽文件到此，或 <label class="link"><input id="input-upload" type="file" multiple hidden />点击选择</label></p>
+        <p class="muted">支持断点续传、并发分片上传</p>
+      </div>
+      <div class="row" style="gap:16px; margin: 8px 0 16px;">
+        <label><input type="checkbox" id="chk-open" /> 完成后在电脑上打开文件夹</label>
+      </div>
+      <div id="upload-list"></div>
+      <h3 style="margin-top:24px;">接收的文件</h3>
+      <div class="row" style="gap:8px; margin: 8px 0 16px; flex-wrap: wrap;">
+        <button id="btn-open-downloads" class="btn">打开接收目录</button>
+        <button id="btn-refresh-downloads" class="btn">刷新</button>
+        <button id="btn-del-dl-selected" class="btn">删除选中</button>
+        <button id="btn-clear-dl" class="btn">清空接收目录</button>
+      </div>
+      <div id="downloads-list"></div>
+    </section>
+
+    <section id="panel-outbox" style="display:none">
+      <div class="dropzone" id="dropzone-outbox">
+        <p>在电脑浏览器打开本页以拖拽文件到“共享箱”，或 <label class="link"><input id="input-outbox" type="file" multiple hidden />点击选择</label></p>
+        <p class="muted">iPhone 可在下方列表点击下载</p>
+      </div>
+      <div class="row" style="gap:8px; margin: 8px 0 16px; flex-wrap: wrap;">
+        <button id="btn-zip-selected" class="tab btn-wide">下载选中为 ZIP</button>
+        <button id="btn-zip-all" class="tab btn-wide">下载全部为 ZIP</button>
+        <button id="btn-del-ob-selected" class="tab btn-wide">删除选中</button>
+        <button id="btn-clear-ob" class="tab btn-wide">清空共享箱</button>
+      </div>
+      <div id="outbox-list"></div>
+    </section>
+  </div>
+
+  <script>
+    const DEFAULT_CHUNK = {{ chunk_size }};
+    const MAX_CONCURRENCY = {{ max_concurrency }};
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
