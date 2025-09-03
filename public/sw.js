@@ -7,7 +7,7 @@ const urlsToCache = [
     '/index.html',
     '/styles.css',
     '/background-transfer-styles.css',
-    '/app.js',
+    '/main.js',
     '/manifest.json'
 ];
 
