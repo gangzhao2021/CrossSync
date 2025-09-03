@@ -118,11 +118,22 @@
   // ZIP & Clear actions
   App.zipAndDownloadAll = function(){ if(!window.JSZip){ alert('JSZip 未加载'); return; } var items=(this.downloadItems||[]).slice(); if(items.length===0){ alert('暂无可打包的文件'); return; } var zip=new JSZip(); var addOne=function(it){ return fetch(it.url).then(function(r){ return r.blob(); }).then(function(b){ zip.file(it.name,b); }); }; var seq=Promise.resolve(); items.forEach(function(it){ seq=seq.then(function(){ return addOne(it); }); }); seq.then(function(){ return zip.generateAsync({type:'blob'}); }).then(function(blob){ var url=URL.createObjectURL(blob); var a=document.createElement('a'); a.href=url; var ts=new Date().toISOString().replace(/[:.]/g,'-'); a.download='CrossSync-'+ts+'.zip'; document.body.appendChild(a); a.click(); setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); },500); }).catch(function(e){ console.error('zip error',e); alert('打包失败'); }); };
 
-  App.clearReceived = function(){ try{ (this.downloadItems||[]).forEach(function(it){ if(it && it.url && typeof it.url==='string' && it.indexOf('blob:')===0){ try{ URL.revokeObjectURL(it); }catch(e){} } }); }catch(e){} var list=$('filesList'); if(list){ while(list.firstChild){ list.removeChild(list.firstChild); } } this.downloadItems=[]; var panel=$('receivedFiles'); if(panel) panel.style.display='none'; };
+  App.clearReceived = function(){
+    try{
+      (this.downloadItems||[]).forEach(function(it){
+        if(it && typeof it.url==='string' && it.url.indexOf('blob:')===0){
+          try{ URL.revokeObjectURL(it.url); }catch(e){}
+        }
+      });
+    }catch(e){}
+    var list=$('filesList'); if(list){ while(list.firstChild){ list.removeChild(list.firstChild); } }
+    this.downloadItems=[]; var panel=$('receivedFiles'); if(panel) panel.style.display='none';
+  };
 
   document.addEventListener('DOMContentLoaded', function(){ App.init(); });
 })();
 
 // Legacy compatibility
-App.downloadAll = function(){ App.zipAndDownloadAll(); };
-
+if (window.App) {
+  window.App.downloadAll = function(){ window.App.zipAndDownloadAll(); };
+}
