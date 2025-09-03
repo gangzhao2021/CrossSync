@@ -21,6 +21,8 @@ const PORT = process.env.PORT || 3010;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
+// 将端口写入 app，便于在路由中读取
+app.set('port', PORT);
 
 // 存储连接的设备和房间信息
 const devices = new Map(); // socketId -> device info
@@ -92,15 +94,23 @@ function getAllLocalIPs() {
     const { networkInterfaces } = require('os');
     const nets = networkInterfaces();
     const ips = [];
-    
+
+    const isPrivateIP = (ip) => {
+        return (
+            ip.startsWith('10.') ||
+            ip.startsWith('192.168.') ||
+            /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip)
+        );
+    };
+
     for (const name of Object.keys(nets)) {
         for (const net of nets[name]) {
-            if (net.family === 'IPv4' && !net.internal && net.address.startsWith('192.168')) {
+            if (net.family === 'IPv4' && !net.internal && isPrivateIP(net.address)) {
                 ips.push(net.address);
             }
         }
     }
-    
+
     return ips;
 }
 
@@ -169,16 +179,29 @@ io.on('connection', (socket) => {
     });
     
     // 创建房间
-    socket.on('create-room', () => {
+    socket.on('create-room', (data = {}) => {
         const device = devices.get(socket.id);
         if (!device) return;
         
-        const roomId = generateRoomId();
+        // 允许可选指定房间ID（恢复场景）
+        const requestedId = (data && typeof data.roomId === 'string' && data.roomId.trim().length > 0)
+            ? data.roomId.trim().toUpperCase()
+            : null;
+        let roomId;
+        if (requestedId) {
+            if (rooms.has(requestedId)) {
+                // 房间已存在，则将当前设备加入该房间（便于断线重连恢复）
+                roomId = requestedId;
+            } else {
+                roomId = requestedId;
+                rooms.set(roomId, new Set());
+            }
+        } else {
+            roomId = generateRoomId();
+        }
         device.roomId = roomId;
         
-        if (!rooms.has(roomId)) {
-            rooms.set(roomId, new Set());
-        }
+        if (!rooms.has(roomId)) rooms.set(roomId, new Set());
         rooms.get(roomId).add(socket.id);
         
         socket.join(roomId);
@@ -388,7 +411,7 @@ server.listen(PORT, '0.0.0.0', () => {
     
     console.log(`\n💡 提示:`);
     console.log(`   • 确保手机和电脑连接到同一WiFi网络`);
-    console.log(`   • 如果无法访问，请运行 setup-firewall.bat 配置防火墙`);
+    console.log(`   • 如无法访问，请检查 Windows 防火墙入站规则是否放行 Node.js`);
     console.log(`   • ⭐ 标记的是推荐地址\n`);
 });
 

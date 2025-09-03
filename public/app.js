@@ -7,16 +7,20 @@ class FileTransferApp {
         this.peerConnections = new Map();
         this.dataChannels = new Map();
         this.connectedDevices = new Map(); // 存储连接设备信息
-        this.receivingFiles = new Map(); // 存储正在接收的文件信息 (fileId -> fileInfo)
+        this.receivingFiles = new Map(); // 存储正在接收的文件信�?(fileId -> fileInfo)
         this.fileTransferQueue = []; // 文件传输队列
         this.isHost = false;
         this.wakeLock = null; // 防止手机睡眠
-        this.isTransferring = false; // 全局传输状态
-        this.connectionMonitor = null; // 连接监控定时器
+        this.isTransferring = false; // 全局传输状�?
+        this.connectionMonitor = null; // 连接监控定时�?
         this.reconnectAttempts = 0; // 重连尝试次数
-        this.maxReconnectAttempts = 5; // 最大重连次数
-        this.transferState = new Map(); // 保存传输状态以便恢复
+        this.maxReconnectAttempts = 5; // 最大重连次�?
+        this.transferState = new Map(); // 保存传输状态以便恢�?
         this.keepAliveInterval = null; // 保活心跳
+        this.deviceRegistered = false; // 设备是否已在服务端登�?
+        this.hasAttemptedRoomFlow = false; // 是否已尝试创�?加入房间
+        this.urlRoomParam = null; // URL中携带的房间参数
+        this.shouldRejoinRoom = false; // 断线后是否应恢复房间
         
         // WebRTC配置
         this.rtcConfig = {
@@ -33,19 +37,19 @@ class FileTransferApp {
         // 初始化Socket连接
         this.initSocket();
         
-        // 绑定事件监听器
+        // 绑定事件监听�?
         this.bindEvents();
         
-        // 检查URL参数
+        // 读取URL参数（房间ID），实际触发在设备注册后
         this.checkUrlParams();
         
-        // 检测设备信息
+        // 检测设备信�?
         this.detectDevice();
         
         // 初始化防睡眠机制
         this.initWakeLock();
         
-        // 监听页面可见性变化
+        // 监听页面可见性变�?
         this.initVisibilityHandler();
         
         // 请求通知权限
@@ -62,7 +66,7 @@ class FileTransferApp {
         this.socket = io();
         
         this.socket.on('connect', () => {
-            console.log('已连接到服务器');
+            console.log('已连接到服务�?);
             this.reconnectAttempts = 0; // 重置重连计数
             
             // 移除重连提示
@@ -71,35 +75,52 @@ class FileTransferApp {
                 reconnectNotification.remove();
             }
             
-            // 暂时不隐藏重连按钮，等到有设备连接时再隐藏
+            // 暂时不隐藏重连按钮，等到有设备连接时再隐�?
             console.log('已连接到服务器，但先保持重连按钮可见');
             
             this.registerDevice();
             
-            // 尝试恢复传输状态
+            // 尝试恢复传输状�?
             this.restoreTransferState();
+            // UI: 更新连接与设备状�?
+            try {
+                this.updateConnectionStatus('已连接到服务�?, 'connected');
+                const ds = document.getElementById('deviceStatus');
+                if (ds) {
+                    ds.textContent = '在线';
+                    ds.className = 'device-status online';
+                }
+            } catch (e) { /* noop */ }
         });
         
         // 心跳响应
         this.socket.on('pong', () => {
-            console.log('收到服务器心跳响应');
+            console.log('收到服务器心跳响�?);
         });
         
         this.socket.on('disconnect', () => {
             console.log('与服务器断开连接');
             this.updateConnectionStatus('连接断开');
             
-            // 显示重连按钮（无论是否在传输）
-            console.log('断开连接事件触发，准备显示重连按钮');
+            // 显示重连按钮（无论是否在传输�?
+            console.log('断开连接事件触发，准备显示重连按�?);
             this.showReconnectControls();
+            try {
+                this.updateConnectionStatus('连接断开', 'offline');
+                const ds = document.getElementById('deviceStatus');
+                if (ds) {
+                    ds.textContent = '离线';
+                    ds.className = 'device-status offline';
+                }
+            } catch (e) { /* noop */ }
             
-            // 强制显示重连按钮（防止被其他逻辑隐藏）
+            // 强制显示重连按钮（防止被其他逻辑隐藏�?
             setTimeout(() => {
                 console.log('延迟强制显示重连按钮');
                 this.showReconnectControls();
             }, 100);
             
-            // 如果正在传输，处理连接中断
+            // 如果正在传输，处理连接中�?
             if (this.isTransferring) {
                 this.handleConnectionLost();
             }
@@ -108,20 +129,25 @@ class FileTransferApp {
         this.socket.on('device-registered', (data) => {
             this.deviceId = data.deviceId;
             this.updateDeviceInfo(data.deviceInfo);
-            console.log('设备已注册:', data.deviceInfo);
+            console.log('设备已注�?', data.deviceInfo);
+            this.deviceRegistered = true;
+            // 注册完成后再尝试创建/加入房间，避免竞�?
+            this.maybeStartRoomFlow();
         });
         
         this.socket.on('room-created', (data) => {
             this.roomId = data.roomId;
             this.isHost = true;
             this.updateRoomId(data.roomId);
-            this.generateQRCode(data.roomId);
+            this.updateUrlWithRoomId(data.roomId);
+            this.generateQRCodeUI(data.roomId);
             this.showDevicesList();
         });
         
         this.socket.on('room-joined', (data) => {
             this.roomId = data.roomId;
             this.updateRoomId(data.roomId);
+            this.updateUrlWithRoomId(data.roomId);
             this.showDevicesList();
             this.hideQRCode();
         });
@@ -178,9 +204,9 @@ class FileTransferApp {
         selectBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         
-        // 移动端不需要拖拽功能
+        // 移动端不需要拖拽功�?
         
-        // 帮助和关于按钮
+        // 帮助和关于按�?
         const helpBtn = document.getElementById('helpBtn');
         const aboutBtn = document.getElementById('aboutBtn');
         const closeHelp = document.getElementById('closeHelp');
@@ -196,23 +222,123 @@ class FileTransferApp {
                 helpModal.style.display = 'none';
             }
         });
+
+        // 键盘 ESC 关闭帮助
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const hm = document.getElementById('helpModal');
+                if (hm && hm.style.display === 'block') {
+                    hm.style.display = 'none';
+                }
+            }
+        });
+
+        // 桌面端启用拖拽上�?
+        if (uploadArea && !(this.isMobile)) {
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+            uploadArea.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+            });
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    this.processFiles(e.dataTransfer.files);
+                }
+            });
+        }
+
+        // 点击/回车 上传区域 也可打开文件选择�?
+        if (uploadArea) {
+            const openPicker = () => fileInput && fileInput.click();
+            uploadArea.addEventListener('click', openPicker);
+            uploadArea.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openPicker();
+                }
+            });
+        }
     }
     
     checkUrlParams() {
         const urlParams = new URLSearchParams(window.location.search);
-        const roomParam = urlParams.get('room');
-        
-        if (roomParam) {
-            // 延迟加入房间，等待设备注册完成
-            setTimeout(() => {
-                this.joinRoom(roomParam);
-            }, 1000);
-        } else {
-            // 创建新房间
-            setTimeout(() => {
-                this.createRoom();
-            }, 1000);
+        this.urlRoomParam = urlParams.get('room');
+        // 实际动作等设备注册完成后触发
+        this.maybeStartRoomFlow();
+    }
+
+    // 更健壮的二维码生成与渲染（清晰文�?+ 备用地址�?
+    async generateQRCodeUI(roomId) {
+        try {
+            const response = await fetch(`/api/qr/${roomId}`);
+            const data = await response.json();
+
+            const qrContainer = document.getElementById('qrContainer');
+            const urls = [];
+            if (data && data.url) urls.push({ url: data.url, recommended: true });
+            if (Array.isArray(data.alternativeIPs)) {
+                try {
+                    const base = new URL(data.url);
+                    data.alternativeIPs.forEach(ip => {
+                        urls.push({ url: `${base.protocol}//${ip}:${base.port}?room=${roomId}`, recommended: false });
+                    });
+                } catch (_) {}
+            }
+            const urlListHtml = urls.map(u => `
+                <p>${u.recommended ? '推荐' : '备�?}�?a href="${u.url}" target="_blank" rel="noopener">${u.url}</a></p>
+            `).join('');
+
+            qrContainer.innerHTML = `
+                <img src="${data.qrCode}" alt="QR Code" style="max-width: 200px;">
+                <p style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    用其他设备扫描此二维码加�?
+                </p>
+                <div class="address-list" style="margin-top: 15px; font-size: 0.8rem; color: #888; text-align: left;">
+                    <p><strong>如果二维码无法访问，请手动输入以下地址之一�?/strong></p>
+                    ${urlListHtml}
+                    <p style="margin-top: 8px; font-style: italic;">确保手机和电脑连接同一 WiFi 网络</p>
+                </div>
+            `;
+
+            this.updateConnectionStatus('等待其他设备扫码加入...', 'connecting');
+        } catch (error) {
+            console.error('生成 QR 码失�?', error);
+            this.updateConnectionStatus('QR 码生成失�?, 'offline');
         }
+    }
+
+    // 在设备成功注册后再创�?加入房间，避免服务端拒绝
+    maybeStartRoomFlow() {
+        if (this.hasAttemptedRoomFlow) return;
+        if (!this.deviceRegistered) return;
+
+        // 断线恢复优先：有 roomId 则按角色恢复
+        if (this.shouldRejoinRoom && this.roomId) {
+            this.hasAttemptedRoomFlow = true;
+            if (this.isHost) {
+                this.socket.emit('create-room', { roomId: this.roomId });
+                this.updateConnectionStatus(`正在恢复房间 ${this.roomId}...`, 'connecting');
+            } else {
+                this.joinRoom(this.roomId);
+            }
+            return;
+        }
+
+        // URL 参数优先加入
+        if (this.urlRoomParam) {
+            this.hasAttemptedRoomFlow = true;
+            this.joinRoom(this.urlRoomParam);
+            return;
+        }
+
+        // 默认创建
+        this.hasAttemptedRoomFlow = true;
+        this.createRoom();
     }
     
     detectDevice() {
@@ -239,7 +365,7 @@ class FileTransferApp {
             deviceIcon = '💻';
         }
         
-        // 为移动设备添加特殊的CSS类
+        // 为移动设备添加特殊的CSS�?
         if (this.isMobile) {
             document.body.classList.add('mobile-device');
         }
@@ -269,7 +395,7 @@ class FileTransferApp {
     
     createRoom() {
         this.socket.emit('create-room');
-        this.updateConnectionStatus('创建房间中...');
+        this.updateConnectionStatus('创建房间�?..');
     }
     
     joinRoom(roomId) {
@@ -283,24 +409,38 @@ class FileTransferApp {
             const data = await response.json();
             
             const qrContainer = document.getElementById('qrContainer');
+            // 构建动态地址列表
+            const urls = [];
+            if (data && data.url) {
+                urls.push({ url: data.url, recommended: true });
+            }
+            if (Array.isArray(data.alternativeIPs)) {
+                try {
+                    const base = new URL(data.url);
+                    data.alternativeIPs.forEach(ip => {
+                        urls.push({ url: `${base.protocol}//${ip}:${base.port}?room=${roomId}`, recommended: false });
+                    });
+                } catch (e) {}
+            }
+            const urlListHtml = urls.map(u => `
+                <p>${u.recommended ? '�? : '�?} <a href="${u.url}" target="_blank" rel="noopener">${u.url}</a></p>
+            `).join('');
             qrContainer.innerHTML = `
                 <img src="${data.qrCode}" alt="QR Code" style="max-width: 200px;">
                 <p style="margin-top: 10px; font-size: 0.9rem; color: #666;">
-                    用其他设备扫描此二维码加入
+                    用其他设备扫描此二维码加�?
                 </p>
-                <div style="margin-top: 15px; font-size: 0.8rem; color: #888; text-align: left;">
-                    <p><strong>如果二维码无法访问，请手动输入以下地址之一：</strong></p>
-                    <p>• http://192.168.2.25:3010?room=${roomId}</p>
-                    <p>• http://192.168.137.1:3010?room=${roomId}</p>
-                    <p>• http://192.168.109.1:3010?room=${roomId}</p>
+                <div class="address-list" style="margin-top: 15px; font-size: 0.8rem; color: #888; text-align: left;">
+                    <p><strong>如果二维码无法访问，请手动输入以下地址之一�?/strong></p>
+                    ${urlListHtml}
                     <p style="margin-top: 8px; font-style: italic;">确保手机和电脑连接同一WiFi网络</p>
                 </div>
             `;
             
             this.updateConnectionStatus('等待其他设备扫码加入...');
         } catch (error) {
-            console.error('生成QR码失败:', error);
-            this.updateConnectionStatus('QR码生成失败');
+            console.error('生成QR码失�?', error);
+            this.updateConnectionStatus('QR码生成失�?);
         }
     }
     
@@ -310,17 +450,86 @@ class FileTransferApp {
         document.getElementById('deviceStatus').className = 'device-status online';
     }
     
-    updateConnectionStatus(status) {
-        document.getElementById('connectionStatus').textContent = status;
+    updateConnectionStatus(status, state) {
+        const el = document.getElementById('connectionStatus');
+        if (!el) return;
+
+        // 尝试推断状态（如果未显式传入）
+        let inferred = typeof state === 'string' ? state : null;
+        if (!inferred) {
+            const s = String(status || '');
+            if (/(断开|失败|错误)/.test(s)) inferred = 'offline';
+            else if (/(已连接|恢复|可以传输)/.test(s)) inferred = 'connected';
+            else if (/(创建|加入|等待|正在|重连)/.test(s)) inferred = 'connecting';
+        }
+
+        // 更新指示器样�?
+        const indicator = document.getElementById('connectionIndicator');
+        if (indicator) {
+            indicator.classList.remove('connected', 'connecting', 'offline');
+            if (inferred === 'connected') indicator.classList.add('connected');
+            else if (inferred === 'connecting') indicator.classList.add('connecting');
+            else if (inferred === 'offline') indicator.classList.add('offline');
+        }
+
+        // 设置文本，同时保留指示器节点
+        if (indicator && indicator.parentElement === el) {
+            el.innerHTML = '';
+            el.appendChild(indicator);
+            el.appendChild(document.createTextNode(' ' + (status || '')));
+        } else {
+            el.textContent = status || '';
+        }
     }
     
     updateRoomId(roomId) {
         document.getElementById('roomId').textContent = roomId;
     }
+
+    // 将房间号写入 URL，便于二次访�?分享
+    updateUrlWithRoomId(roomId) {
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('room', roomId);
+            window.history.replaceState(null, '', url.toString());
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    copyRoomId() {
+        try {
+            const id = document.getElementById('roomId').textContent.trim();
+            if (!id || id === '-') return;
+            navigator.clipboard.writeText(id).then(() => {
+                this.showToast('房间ID已复�?);
+            }).catch(() => {
+                this.showToast('复制失败，请手动选择');
+            });
+        } catch (e) {
+            this.showToast('复制失败，请手动选择');
+        }
+    }
+
+    showToast(message) {
+        const n = document.createElement('div');
+        n.style.cssText = `position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 1100;`;
+        n.textContent = message;
+        document.body.appendChild(n);
+        setTimeout(() => { if (n.parentNode) n.parentNode.removeChild(n); }, 1800);
+    }
     
     showDevicesList() {
         document.getElementById('devicesList').style.display = 'block';
         document.getElementById('fileTransfer').style.display = 'block';
+    }
+    
+    // 显示文件传输区域（在建立连接后调用）
+    showFileTransfer() {
+        const section = document.getElementById('fileTransfer');
+        if (section) {
+            section.style.display = 'block';
+        }
     }
     
     hideQRCode() {
@@ -360,13 +569,13 @@ class FileTransferApp {
     
     // 检查并恢复WebRTC连接
     checkAndRestoreWebRTCConnections(devices) {
-        console.log('检查WebRTC连接状态...');
+        console.log('检查WebRTC连接状�?..');
         
         devices.forEach(device => {
             const peerConnection = this.peerConnections.get(device.id);
             const dataChannel = this.dataChannels.get(device.id);
             
-            // 如果没有WebRTC连接或连接已断开，重新建立连接
+            // 如果没有WebRTC连接或连接已断开，重新建立连�?
             if (!peerConnection || 
                 peerConnection.connectionState === 'disconnected' || 
                 peerConnection.connectionState === 'failed' || 
@@ -375,12 +584,12 @@ class FileTransferApp {
                 
                 console.log(`需要重新建立与设备 ${device.name} 的WebRTC连接`);
                 
-                // 延迟重新连接，避免竞争条件
+                // 延迟重新连接，避免竞争条�?
                 setTimeout(() => {
                     this.connectToDevice(device.id);
                 }, 500 + Math.random() * 1000); // 随机延迟避免同时发起连接
             } else {
-                console.log(`与设备 ${device.name} 的WebRTC连接正常`);
+                console.log(`与设�?${device.name} 的WebRTC连接正常`);
             }
         });
     }
@@ -402,12 +611,12 @@ class FileTransferApp {
             }
         });
         
-        console.log(`WebRTC连接状态: ${healthyConnections}/${totalConnections} 连接正常`);
+        console.log(`WebRTC连接状�? ${healthyConnections}/${totalConnections} 连接正常`);
         
         if (healthyConnections > 0) {
-            // 有健康的WebRTC连接，隐藏重连按钮
+            // 有健康的WebRTC连接，隐藏重连按�?
             this.hideReconnectControls();
-            this.updateConnectionStatus(`设备已连接 (${healthyConnections}/${totalConnections})，可以传输文件`);
+            this.updateConnectionStatus(`设备已连�?(${healthyConnections}/${totalConnections})，可以传输文件`);
         } else if (totalConnections > 0) {
             // 有设备但WebRTC连接还未建立
             this.updateConnectionStatus('正在建立连接...');
@@ -434,7 +643,7 @@ class FileTransferApp {
     }
     
     async connectToDevice(targetId) {
-        console.log('连接到设备:', targetId);
+        console.log('连接到设�?', targetId);
         
         try {
             const peerConnection = new RTCPeerConnection(this.rtcConfig);
@@ -447,7 +656,7 @@ class FileTransferApp {
             this.setupDataChannel(dataChannel, targetId);
             this.dataChannels.set(targetId, dataChannel);
             
-            // 处理ICE候选者
+            // 处理ICE候选�?
             peerConnection.addEventListener('icecandidate', (event) => {
                 if (event.candidate) {
                     this.socket.emit('webrtc-ice-candidate', {
@@ -457,9 +666,9 @@ class FileTransferApp {
                 }
             });
             
-            // 处理连接状态变化
+            // 处理连接状态变�?
             peerConnection.addEventListener('connectionstatechange', () => {
-                console.log('连接状态:', peerConnection.connectionState);
+                console.log('连接状�?', peerConnection.connectionState);
                 if (peerConnection.connectionState === 'connected') {
                     this.onPeerConnected(targetId);
                 } else if (peerConnection.connectionState === 'failed' || 
@@ -483,7 +692,7 @@ class FileTransferApp {
         } catch (error) {
             console.error('连接设备失败:', error);
             this.showError('连接失败，请重试');
-            // 清理失败的连接
+            // 清理失败的连�?
             this.peerConnections.delete(targetId);
             this.dataChannels.delete(targetId);
         }
@@ -503,7 +712,7 @@ class FileTransferApp {
                 this.dataChannels.set(sourceId, dataChannel);
             });
             
-            // 处理ICE候选者
+            // 处理ICE候选�?
             peerConnection.addEventListener('icecandidate', (event) => {
                 if (event.candidate) {
                     this.socket.emit('webrtc-ice-candidate', {
@@ -513,9 +722,9 @@ class FileTransferApp {
                 }
             });
             
-            // 处理连接状态变化
+            // 处理连接状态变�?
             peerConnection.addEventListener('connectionstatechange', () => {
-                console.log('连接状态:', peerConnection.connectionState);
+                console.log('连接状�?', peerConnection.connectionState);
                 if (peerConnection.connectionState === 'connected') {
                     this.onPeerConnected(sourceId);
                 }
@@ -556,28 +765,28 @@ class FileTransferApp {
             try {
                 await peerConnection.addIceCandidate(candidate);
             } catch (error) {
-                console.error('添加ICE候选者失败:', error);
+                console.error('添加ICE候选者失�?', error);
             }
         }
     }
     
     setupDataChannel(dataChannel, peerId) {
-        // 初始化数据通道状态
+        // 初始化数据通道状�?
         dataChannel._isTransferring = false;
         
         dataChannel.addEventListener('open', () => {
             console.log('数据通道已打开:', peerId);
-            dataChannel._isTransferring = false; // 确保状态清空
+            dataChannel._isTransferring = false; // 确保状态清�?
         });
         
         dataChannel.addEventListener('close', () => {
-            console.log('数据通道已关闭:', peerId);
-            dataChannel._isTransferring = false; // 清理状态
+            console.log('数据通道已关�?', peerId);
+            dataChannel._isTransferring = false; // 清理状�?
         });
         
         dataChannel.addEventListener('error', (error) => {
             console.error('数据通道错误:', error);
-            dataChannel._isTransferring = false; // 错误时清理状态
+            dataChannel._isTransferring = false; // 错误时清理状�?
         });
         
         dataChannel.addEventListener('message', (event) => {
@@ -588,7 +797,7 @@ class FileTransferApp {
     onPeerConnected(peerId) {
         console.log('已连接到设备:', peerId);
         
-        // 检查所有连接状态
+        // 检查所有连接状�?
         let healthyConnections = 0;
         this.connectedDevices.forEach((device, deviceId) => {
             const peerConnection = this.peerConnections.get(deviceId);
@@ -602,19 +811,19 @@ class FileTransferApp {
             }
         });
         
-        // 更新连接状态
+        // 更新连接状�?
         if (healthyConnections > 0) {
             this.hideReconnectControls();
-            this.updateConnectionStatus(`设备已连接 (${healthyConnections}个)，可以传输文件`);
+            this.updateConnectionStatus(`设备已连�?(${healthyConnections}�?，可以传输文件`);
         }
         
-        // 更新设备状态显示
+        // 更新设备状态显�?
         const deviceElements = document.querySelectorAll('.device-item');
         deviceElements.forEach(element => {
             const button = element.querySelector('.connect-btn');
             if (button && button.getAttribute('onclick').includes(peerId)) {
                 element.classList.add('connected');
-                button.textContent = '已连接';
+                button.textContent = '已连�?;
                 button.disabled = true;
             }
         });
@@ -622,12 +831,12 @@ class FileTransferApp {
         // 显示文件传输区域
         this.showFileTransfer();
         
-        // 如果是恢复的传输，尝试继续传输
+        // 如果是恢复的传输，尝试继续传�?
         if (this.isTransferring) {
-            console.log('检测到之前有传输在进行，尝试恢复传输');
-            this.updateConnectionStatus('连接已恢复，正在检查传输状态...');
+            console.log('检测到之前有传输在进行，尝试恢复传�?);
+            this.updateConnectionStatus('连接已恢复，正在检查传输状�?..');
             
-            // 延迟恢复传输，等待所有连接稳定
+            // 延迟恢复传输，等待所有连接稳�?
             setTimeout(() => {
                 this.resumeFileTransfers();
             }, 1000);
@@ -646,32 +855,50 @@ class FileTransferApp {
                 if (!fileInfo.completed) {
                     console.log(`文件 ${fileInfo.fileName} 传输未完成，等待继续接收...`);
                     
-                    // 显示进度条
+                    // 显示进度�?
                     const progress = (fileInfo.receivedSize / fileInfo.totalSize) * 100;
                     this.showReceivedFile(fileInfo.fileName, progress);
                     
-                    // 更新状态
+                    // 更新状�?
                     this.updateConnectionStatus(`正在恢复传输: ${fileInfo.fileName}`);
                 }
             });
         }
         
-        // 检查是否有未完成的发送队列
+        // 检查是否有未完成的发送队�?
         if (this.fileTransferQueue.length > 0) {
-            console.log('发现未完成的发送队列:', this.fileTransferQueue.length, '个文件');
+            console.log('发现未完成的发送队�?', this.fileTransferQueue.length, '个文�?);
             
-            // 重新开始传输队列
+            // 重新开始传输队�?
             setTimeout(() => {
                 this.processFileQueue();
             }, 500);
         }
         
-        // 如果没有任何传输，重置状态
+        // 如果没有任何传输，重置状�?
         if (this.receivingFiles.size === 0 && this.fileTransferQueue.length === 0) {
-            console.log('没有发现需要恢复的传输，重置传输状态');
+            console.log('没有发现需要恢复的传输，重置传输状�?);
             this.isTransferring = false;
             this.updateConnectionStatus('连接已恢复，可以传输文件');
         }
+    }
+    
+    // 处理发送队列（断线恢复的兜底实现）
+    processFileQueue() {
+        if (!Array.isArray(this.fileTransferQueue) || this.fileTransferQueue.length === 0) {
+            return;
+        }
+        const pending = this.fileTransferQueue.slice();
+        this.fileTransferQueue.length = 0;
+        pending.forEach(item => {
+            try {
+                const { file, peerId } = item || {};
+                const dc = this.dataChannels.get(peerId);
+                if (file && dc && dc.readyState === 'open') {
+                    this.sendFileToDevice(file, peerId);
+                }
+            } catch (_) {}
+        });
     }
     
     // 文件处理相关方法
@@ -684,40 +911,15 @@ class FileTransferApp {
     
     // 拖拽功能已移除，专注于移动端体验
     
-    processFiles(files) {
-        // 检查是否有连接的设备
-        if (this.dataChannels.size === 0) {
-            this.showError('请先连接到其他设备');
-            return;
-        }
-        
-        // 检查是否有正在进行的传输
-        let hasActiveTransfer = false;
-        this.dataChannels.forEach((dataChannel) => {
-            if (dataChannel._isTransferring) {
-                hasActiveTransfer = true;
-            }
-        });
-        
-        if (hasActiveTransfer) {
-            this.showError('有文件正在传输，请稍后再试');
-            return;
-        }
-        
-        console.log(`开始传输 ${files.length} 个文件`);
-        
-        // 为每个文件分别发送到所有连接的设备
-        Array.from(files).forEach((file, index) => {
-            this.dataChannels.forEach((dataChannel, peerId) => {
-                if (dataChannel && dataChannel.readyState === 'open') {
-                    // 稍微延迟发送，避免并发冲突
-                    setTimeout(() => {
-                        this.sendFileToDevice(file, peerId);
-                    }, index * 100);
-                }
-            });
-        });
+    async processFiles(files) {
+        // temporary stub for debugging
+        let open=false; this.dataChannels.forEach(dc=>{ if(dc && dc.readyState==="open") open=true; });
+        if(!open){ this.showError("��δ�������ӣ��������ӵ��Զ��豸"); return; }
+        let busy=false; this.dataChannels.forEach(dc=>{ if(dc && dc._isTransferring) busy=true; });
+        if(busy){ this.showError("���ļ����ڴ��䣬���Ժ�����"); return; }
+        Array.from(files).forEach((file, idx)=>{ this.dataChannels.forEach((dc, peerId)=>{ if(dc && dc.readyState==="open"){ setTimeout(()=> this.sendFileToDevice(file, peerId), idx*100); } }); });
     }
+        
     
     generateFileId() {
         return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -727,18 +929,18 @@ class FileTransferApp {
         const dataChannel = this.dataChannels.get(peerId);
         
         if (!dataChannel || dataChannel.readyState !== 'open') {
-            console.error('数据通道未准备就绪:', peerId);
+            console.error('数据通道未准备就�?', peerId);
             return;
         }
         
-        // 检查是否有正在进行的传输
+        // 检查是否有正在进行的传�?
         if (dataChannel._isTransferring) {
-            console.log('数据通道正在传输，稍后重试...');
+            console.log('数据通道正在传输，稍后重�?..');
             setTimeout(() => this.sendFileToDevice(file, peerId), 1000);
             return;
         }
         
-        // 标记传输开始
+        // 标记传输开�?
         dataChannel._isTransferring = true;
         this.isTransferring = true;
         
@@ -748,12 +950,12 @@ class FileTransferApp {
         // 更新页面标题
         document.title = `📤 ${file.name} - CrossSync`;
         
-        // 显示后台传输提示（大文件）
+        // 显示后台传输提示（大文件�?
         if (file.size > 10 * 1024 * 1024) { // 10MB以上
             this.showBackgroundTransferTip();
         }
         
-        // 为每个设备生成唯一文件ID（包含设备ID）
+        // 为每个设备生成唯一文件ID（包含设备ID�?
         const fileId = `${peerId}_${this.generateFileId()}`;
         
         console.log('开始发送文件到设备:', file.name, file.size, 'ID:', fileId, 'to:', peerId);
@@ -775,14 +977,14 @@ class FileTransferApp {
         
         dataChannel.send(JSON.stringify(fileInfo));
         
-        // 分块发送文件
+        // 分块发送文�?
         const chunkSize = 16384; // 16KB chunks
         let offset = 0;
         let chunkIndex = 0;
         
         const sendChunk = () => {
             if (offset >= file.size) {
-                // 发送文件结束标记
+                // 发送文件结束标�?
                 const endMessage = {
                     type: 'file-end',
                     fileId: fileId,
@@ -790,14 +992,14 @@ class FileTransferApp {
                 };
                 dataChannel.send(JSON.stringify(endMessage));
                 
-                console.log('文件发送完成:', file.name, 'to:', peerId);
+                console.log('文件发送完�?', file.name, 'to:', peerId);
                 this.showFileProgress(file.name, 100);
                 
-                // 清理传输状态
+                // 清理传输状�?
                 dataChannel._isTransferring = false;
                 this.checkAllTransfersComplete();
                 
-                // 等待缓冲区清空
+                // 等待缓冲区清�?
                 setTimeout(() => {
                     console.log('传输完成，清理缓冲区');
                 }, 500);
@@ -808,7 +1010,7 @@ class FileTransferApp {
             const reader = new FileReader();
             
             reader.onload = (e) => {
-                // 先发送块头信息
+                // 先发送块头信�?
                 const chunkHeader = {
                     type: 'file-chunk-header',
                     fileId: fileId,
@@ -829,9 +1031,9 @@ class FileTransferApp {
                 
                 // 检查缓冲区状态再继续
                 if (dataChannel.bufferedAmount > 32768) { // 32KB
-                    setTimeout(sendChunk, 50); // 等待缓冲区清空
+                    setTimeout(sendChunk, 50); // 等待缓冲区清�?
                 } else {
-                    setTimeout(sendChunk, 10); // 正常发送延迟
+                    setTimeout(sendChunk, 10); // 正常发送延�?
                 }
             };
             
@@ -875,18 +1077,18 @@ class FileTransferApp {
                     };
                     
                     this.receivingFiles.set(message.fileId, fileInfo);
-                    console.log('开始接收文件:', message.name, 'ID:', message.fileId);
+                    console.log('开始接收文�?', message.name, 'ID:', message.fileId);
                     this.showReceivedFile(message.name, 0);
                     
                 } else if (message.type === 'file-chunk-header') {
-                    // 准备接收数据块
+                    // 准备接收数据�?
                     const fileInfo = this.receivingFiles.get(message.fileId);
                     if (fileInfo) {
                         fileInfo.nextExpectedChunk = message.chunkIndex;
                         fileInfo.expectedChunkSize = message.chunkSize;
-                        console.log(`准备接收 ${fileInfo.name} 第${message.chunkIndex}块，大小: ${message.chunkSize}`);
+                        console.log(`准备接收 ${fileInfo.name} �?{message.chunkIndex}块，大小: ${message.chunkSize}`);
                     } else {
-                        console.warn('未找到文件信息:', message.fileId);
+                        console.warn('未找到文件信�?', message.fileId);
                     }
                     
                 } else if (message.type === 'file-end') {
@@ -907,14 +1109,14 @@ class FileTransferApp {
     }
     
     handleBinaryChunk(data, peerId) {
-        // 查找等待此数据块的文件
+        // 查找等待此数据块的文�?
         for (const [fileId, fileInfo] of this.receivingFiles.entries()) {
             if (fileInfo.fromPeerId === peerId && 
                 fileInfo.nextExpectedChunk !== undefined &&
                 fileInfo.expectedChunkSize !== undefined &&
                 data.byteLength === fileInfo.expectedChunkSize) {
                 
-                // 存储数据块
+                // 存储数据�?
                 fileInfo.chunks[fileInfo.nextExpectedChunk] = new Uint8Array(data);
                 fileInfo.receivedChunks++;
                 fileInfo.receivedBytes += data.byteLength;
@@ -924,7 +1126,7 @@ class FileTransferApp {
                 
                 console.log(`文件 ${fileInfo.name} (${fileId}) 进度: ${fileInfo.receivedChunks}/${fileInfo.totalChunks} 块`);
                 
-                // 清除期望值
+                // 清除期望�?
                 fileInfo.nextExpectedChunk = undefined;
                 fileInfo.expectedChunkSize = undefined;
                 return; // 找到匹配的文件后立即返回
@@ -937,13 +1139,13 @@ class FileTransferApp {
     completeFileReceive(fileId) {
         const fileInfo = this.receivingFiles.get(fileId);
         if (!fileInfo) {
-            console.error('未找到文件信息:', fileId);
+            console.error('未找到文件信�?', fileId);
             return;
         }
         
-        console.log(`开始合并文件 ${fileInfo.name}, 共${fileInfo.totalChunks}块`);
+        console.log(`开始合并文�?${fileInfo.name}, �?{fileInfo.totalChunks}块`);
         
-        // 检查缺失的数据块
+        // 检查缺失的数据�?
         const missingChunks = [];
         for (let i = 0; i < fileInfo.totalChunks; i++) {
             if (!fileInfo.chunks[i]) {
@@ -972,20 +1174,20 @@ class FileTransferApp {
         console.log(`文件合并完成: ${fileInfo.name}, 期望大小: ${fileInfo.size}, 实际大小: ${blob.size}`);
         
         // 验证文件大小
-        if (Math.abs(blob.size - fileInfo.size) > 100) { // 允许100字节的误差
-            console.warn(`文件大小不匹配: 期望 ${fileInfo.size}, 实际 ${blob.size}`);
+        if (Math.abs(blob.size - fileInfo.size) > 100) { // 允许100字节的误�?
+            console.warn(`文件大小不匹�? 期望 ${fileInfo.size}, 实际 ${blob.size}`);
         }
         
         // 创建下载链接
         const url = URL.createObjectURL(blob);
         const fileName = this.sanitizeFileName(fileInfo.name);
         
-        // 检测当前设备和发送设备类型
+        // 检测当前设备和发送设备类�?
         const isWindowsReceiver = /windows/i.test(navigator.userAgent);
         const senderDevice = this.connectedDevices.get(fileInfo.fromPeerId);
         const isFromiPhone = senderDevice && (senderDevice.type === 'ios' || /iphone|ipad/i.test(senderDevice.name));
         
-        // 如果是Windows接收iPhone文件，自动下载
+        // 如果是Windows接收iPhone文件，自动下�?
         if (isWindowsReceiver && isFromiPhone) {
             this.autoDownloadFile(url, fileName, 'iPhone');
         } else if (isWindowsReceiver) {
@@ -993,7 +1195,7 @@ class FileTransferApp {
             this.autoDownloadFile(url, fileName, senderDevice ? senderDevice.name : '其他设备');
         }
         
-        // 添加到接收文件列表
+        // 添加到接收文件列�?
         this.addReceivedFile(fileName, blob.size, url);
         
         console.log('文件接收完成:', fileName, '大小:', blob.size, 'FileID:', fileId);
@@ -1009,7 +1211,7 @@ class FileTransferApp {
             a.href = url;
             a.download = fileName;
             a.style.display = 'none';
-            a.target = '_blank'; // 在新窗口中打开，确保下载
+            a.target = '_blank'; // 在新窗口中打开，确保下�?
             document.body.appendChild(a);
             a.click();
             
@@ -1050,20 +1252,12 @@ class FileTransferApp {
             line-height: 1.4;
         `;
         
-        const moveScript = isFromiPhone ? `
-            <div style="margin-top: 8px; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
-                <div style="font-size: 12px; margin-bottom: 4px;">💡 快速移动到iPhone文件夹：</div>
-                <button onclick="window.open('file:///D:/projects/file-transfer-tool/move-iphone-files.bat')" 
-                        style="background: white; color: #007bff; border: none; padding: 4px 8px; border-radius: 3px; font-size: 11px; cursor: pointer;">
-                    运行移动脚本
-                </button>
-            </div>
-        ` : '';
+        const moveScript = '';
         
         notification.innerHTML = `
             <strong>${icon} 来自${deviceName}的文件已下载</strong><br>
             ${fileName}<br>
-            <small>已保存到下载文件夹</small>
+            <small>已保存到下载文件�?/small>
             ${moveScript}
         `;
         
@@ -1110,7 +1304,7 @@ class FileTransferApp {
             fileNameElement.textContent = `接收: ${fileName}`;
             progressText.textContent = Math.round(progress) + '%';
             progressFill.style.width = progress + '%';
-            progressFill.style.backgroundColor = '#28a745'; // 接收时使用绿色
+            progressFill.style.backgroundColor = '#28a745'; // 接收时使用绿�?
         }
         
         if (progress >= 100) {
@@ -1185,8 +1379,8 @@ class FileTransferApp {
         
         const iconMap = {
             // 图片
-            'jpg': '🖼️', 'jpeg': '🖼️', 'png': '🖼️', 'gif': '🖼️', 
-            'bmp': '🖼️', 'webp': '🖼️', 'svg': '🖼️', 'tiff': '🖼️',
+            'jpg': '🖼�?, 'jpeg': '🖼�?, 'png': '🖼�?, 'gif': '🖼�?, 
+            'bmp': '🖼�?, 'webp': '🖼�?, 'svg': '🖼�?, 'tiff': '🖼�?,
             // 文档
             'pdf': '📄', 'doc': '📄', 'docx': '📄', 'txt': '📄', 
             'rtf': '📄', 'odt': '📄',
@@ -1201,8 +1395,8 @@ class FileTransferApp {
             'mp3': '🎧', 'wav': '🎧', 'flac': '🎧', 'aac': '🎧', 
             'ogg': '🎧', 'wma': '🎧',
             // 压缩文件
-            'zip': '🗄️', 'rar': '🗄️', '7z': '🗄️', 'tar': '🗄️', 
-            'gz': '🗄️', 'bz2': '🗄️',
+            'zip': '🗄�?, 'rar': '🗄�?, '7z': '🗄�?, 'tar': '🗄�?, 
+            'gz': '🗄�?, 'bz2': '🗄�?,
             // 代码文件
             'js': '📄', 'html': '📄', 'css': '📄', 'py': '📄', 
             'java': '📄', 'cpp': '📄', 'c': '📄', 'php': '📄',
@@ -1265,7 +1459,7 @@ class FileTransferApp {
     }
     
     showError(message) {
-        // 优化的错误显示
+        // 优化的错误显�?
         console.error('错误:', message);
         
         // 创建错误通知
@@ -1301,12 +1495,12 @@ class FileTransferApp {
     }
     
     showAbout() {
-        alert('CrossSync v1.1\n跨平台文件同步传输工具\n支持iPhone、Android和Windows设备间的文件互传\n\n如果传输卡住，请刷新页面重新连接');
+        alert('CrossSync v2.0.0\n跨平台文件同步传输工具\n支持iPhone、Android和Windows设备间的文件互传\n\n如果传输卡住，请刷新页面重新连接');
     }
     
     // 重置传输状态（调试用）
     resetTransferState() {
-        console.log('重置所有传输状态');
+        console.log('重置所有传输状�?);
         this.dataChannels.forEach((dataChannel, peerId) => {
             if (dataChannel) {
                 dataChannel._isTransferring = false;
@@ -1314,7 +1508,7 @@ class FileTransferApp {
             }
         });
         
-        // 清理正在接收的文件
+        // 清理正在接收的文�?
         this.receivingFiles.clear();
         
         console.log('状态重置完成，可以重新传输文件');
@@ -1334,10 +1528,10 @@ class FileTransferApp {
         try {
             if ('wakeLock' in navigator) {
                 this.wakeLock = await navigator.wakeLock.request('screen');
-                console.log('已启用防睡眠锁');
+                console.log('已启用防睡眠�?);
                 
                 this.wakeLock.addEventListener('release', () => {
-                    console.log('防睡眠锁已释放');
+                    console.log('防睡眠锁已释�?);
                 });
             }
         } catch (err) {
@@ -1350,18 +1544,18 @@ class FileTransferApp {
         if (this.wakeLock) {
             this.wakeLock.release();
             this.wakeLock = null;
-            console.log('已释放防睡眠锁');
+            console.log('已释放防睡眠�?);
         }
     }
     
-    // 初始化页面可见性处理
+    // 初始化页面可见性处�?
     initVisibilityHandler() {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                console.log('页面切换到后台');
+                console.log('页面切换到后�?);
                 this.onPageHidden();
             } else {
-                console.log('页面切换到前台');
+                console.log('页面切换到前�?);
                 this.onPageVisible();
             }
         });
@@ -1396,17 +1590,17 @@ class FileTransferApp {
     // 显示后台传输提示
     showBackgroundTransferNotification() {
         if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('文件传输进行中', {
-                body: '请保持浏览器在后台运行，传输完成后会通知您',
+            new Notification('文件传输进行�?, {
+                body: '请保持浏览器在后台运行，传输完成后会通知�?,
                 icon: '/favicon.ico'
             });
         }
         
         // 更新页面标题
-        document.title = '📤 传输中... - CrossSync';
+        document.title = '📤 传输�?.. - CrossSync';
     }
     
-    // 检查所有传输是否完成
+    // 检查所有传输是否完�?
     checkAllTransfersComplete() {
         let hasActiveTransfer = false;
         this.dataChannels.forEach((dataChannel) => {
@@ -1430,7 +1624,7 @@ class FileTransferApp {
                 });
             }
             
-            console.log('所有传输完成');
+            console.log('所有传输完�?);
         }
     }
     
@@ -1467,7 +1661,7 @@ class FileTransferApp {
         }
     }
     
-    // 开始连接监控
+    // 开始连接监�?
     startConnectionMonitoring() {
         if (this.connectionMonitor) {
             clearInterval(this.connectionMonitor);
@@ -1475,9 +1669,9 @@ class FileTransferApp {
         
         this.connectionMonitor = setInterval(() => {
             this.checkConnectionHealth();
-        }, 2000); // 每2秒检查一次
+        }, 2000); // �?秒检查一�?
         
-        console.log('开始监控连接状态');
+        console.log('开始监控连接状�?);
     }
     
     // 停止连接监控
@@ -1485,11 +1679,11 @@ class FileTransferApp {
         if (this.connectionMonitor) {
             clearInterval(this.connectionMonitor);
             this.connectionMonitor = null;
-            console.log('停止监控连接状态');
+            console.log('停止监控连接状�?);
         }
     }
     
-    // 检查连接健康状态
+    // 检查连接健康状�?
     checkConnectionHealth() {
         let hasHealthyConnection = false;
         
@@ -1503,30 +1697,30 @@ class FileTransferApp {
             if (pc.connectionState === 'connected') {
                 hasHealthyConnection = true;
             } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                console.warn(`WebRTC连接 ${peerId} 状态异常:`, pc.connectionState);
+                console.warn(`WebRTC连接 ${peerId} 状态异�?`, pc.connectionState);
             }
         });
         
         // 检查数据通道
         this.dataChannels.forEach((dc, peerId) => {
             if (dc.readyState !== 'open') {
-                console.warn(`数据通道 ${peerId} 状态异常:`, dc.readyState);
+                console.warn(`数据通道 ${peerId} 状态异�?`, dc.readyState);
                 hasHealthyConnection = false;
             }
         });
         
         if (!hasHealthyConnection && this.isTransferring) {
-            console.error('检测到连接中断，停止传输');
+            console.error('检测到连接中断，停止传�?);
             this.handleConnectionLost();
         }
     }
     
     // 处理连接丢失
     handleConnectionLost() {
-        // 保存传输状态以便恢复
+        // 保存传输状态以便恢�?
         this.saveTransferState();
         
-        // 停止所有传输
+        // 停止所有传�?
         this.dataChannels.forEach((dc) => {
             dc._isTransferring = false;
         });
@@ -1534,17 +1728,20 @@ class FileTransferApp {
         this.isTransferring = false;
         this.stopConnectionMonitoring();
         
-        // 更新UI显示重连状态
+        // 更新UI显示重连状�?
         document.title = '🔄 正在重连... - CrossSync';
-        this.updateConnectionStatus('连接中断，正在尝试重连...');
+        // 标记为需要恢复房�?
+        this.hasAttemptedRoomFlow = false;
+        this.shouldRejoinRoom = true;
+        this.updateConnectionStatus('连接中断，正在尝试重�?..');
         
         // 不释放防睡眠锁，保持屏幕常亮以便重连
         // this.releaseWakeLock();
         
-        // 显示重连提示而不是错误
+        // 显示重连提示而不是错�?
         this.showReconnectingNotification();
         
-        console.log('检测到连接中断，开始重连流程');
+        console.log('检测到连接中断，开始重连流�?);
         
         // 显示重连按钮
         this.showReconnectControls();
@@ -1553,7 +1750,7 @@ class FileTransferApp {
         this.attemptReconnect();
     }
     
-    // 保存传输状态
+    // 保存传输状�?
     saveTransferState() {
         if (this.isTransferring || this.roomId) {
             const state = {
@@ -1567,20 +1764,20 @@ class FileTransferApp {
             };
             
             localStorage.setItem('fileTransferState', JSON.stringify(state));
-            console.log('已保存传输状态:', state);
+            console.log('已保存传输状�?', state);
         }
     }
     
-    // 恢复传输状态
+    // 恢复传输状�?
     restoreTransferState() {
         try {
             const savedState = localStorage.getItem('fileTransferState');
             if (savedState) {
                 const state = JSON.parse(savedState);
                 
-                // 检查状态是否过期（5分钟）
+                // 检查状态是否过期（5分钟�?
                 if (Date.now() - state.timestamp < 5 * 60 * 1000) {
-                    console.log('恢复之前的传输状态:', state);
+                    console.log('恢复之前的传输状�?', state);
                     
                     // 恢复传输标志
                     this.isTransferring = state.isTransferring;
@@ -1596,7 +1793,7 @@ class FileTransferApp {
                         this.receivingFiles = new Map(state.receivingFiles);
                     }
                     
-                    // 恢复传输状态
+                    // 恢复传输状�?
                     if (state.transferState) {
                         this.transferState = new Map(state.transferState);
                     }
@@ -1604,11 +1801,11 @@ class FileTransferApp {
                     // 恢复房间信息
                     if (state.roomId) {
                         this.roomId = state.roomId;
-                        // 重新加入房间
+                        // 重新加入/创建相同房间
                         setTimeout(() => {
                             if (this.isHost) {
-                                console.log('尝试重新创建房间:', this.roomId);
-                                this.socket.emit('create-room');
+                                console.log('尝试以相同ID重新创建房间:', this.roomId);
+                                this.socket.emit('create-room', { roomId: state.roomId });
                             } else {
                                 console.log('尝试重新加入房间:', this.roomId);
                                 this.socket.emit('join-room', { roomId: state.roomId });
@@ -1616,17 +1813,17 @@ class FileTransferApp {
                         }, 1000);
                     }
                     
-                    // 如果有传输在进行，显示提示
+                    // 如果有传输在进行，显示提�?
                     if (this.isTransferring) {
                         this.updateConnectionStatus('正在恢复传输连接...');
                     }
                 }
                 
-                // 清理已使用的状态
+                // 清理已使用的状�?
                 localStorage.removeItem('fileTransferState');
             }
         } catch (error) {
-            console.error('恢复传输状态失败:', error);
+            console.error('恢复传输状态失�?', error);
         }
     }
     
@@ -1651,8 +1848,8 @@ class FileTransferApp {
         
         notification.innerHTML = `
             <strong>🔄 正在重连...</strong><br>
-            连接中断，正在尝试重新连接<br>
-            <small>请保持网络连接稳定</small>
+            连接中断，正在尝试重新连�?br>
+            <small>请保持网络连接稳�?/small>
         `;
         
         // 移除旧的通知
@@ -1679,18 +1876,18 @@ class FileTransferApp {
             controlsElement.style.setProperty('opacity', '1', 'important');
             controlsElement.style.setProperty('position', 'relative', 'important');
             
-            console.log('设置后 display 样式:', controlsElement.style.display);
-            console.log('重连按钮已显示');
+            console.log('设置�?display 样式:', controlsElement.style.display);
+            console.log('重连按钮已显�?);
             
-            // 滚动到按钮位置
+            // 滚动到按钮位�?
             controlsElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else {
-            console.error('找不到 connectionControls 元素');
-            // 尝试检查 DOM 结构
+            console.error('找不�?connectionControls 元素');
+            // 尝试检�?DOM 结构
             console.log('当前页面 DOM:');
             console.log(document.body.innerHTML.slice(0, 1000));
         }
-        this.updateConnectionStatus('连接中断', true);
+        this.updateConnectionStatus('连接中断', 'offline');
     }
     
     // 隐藏重连控制按钮
@@ -1710,7 +1907,10 @@ class FileTransferApp {
             reconnectBtn.innerHTML = '🔄 正在连接...';
         }
         
-        this.updateConnectionStatus('正在重新连接...');
+        this.updateConnectionStatus('正在重新连接...', 'connecting');
+        // 允许恢复房间流程
+        this.hasAttemptedRoomFlow = false;
+        this.shouldRejoinRoom = true;
         
         try {
             // 重置重连计数
@@ -1748,7 +1948,7 @@ class FileTransferApp {
             });
             
             // 连接成功
-            this.updateConnectionStatus('连接成功，等待设备加入...');
+            this.updateConnectionStatus('连接成功，等待设备加�?..');
             this.hideReconnectControls();
             
             if (reconnectBtn) {
@@ -1760,7 +1960,7 @@ class FileTransferApp {
             
         } catch (error) {
             console.error('手动重连失败:', error);
-            this.updateConnectionStatus('重连失败，请检查网络连接', true);
+            this.updateConnectionStatus('重连失败，请检查网络连�?, true);
             
             if (reconnectBtn) {
                 reconnectBtn.disabled = false;
@@ -1771,9 +1971,9 @@ class FileTransferApp {
     
     // 重置连接（清理所有状态）
     resetConnection() {
-        console.log('重置连接状态');
+        console.log('重置连接状�?);
         
-        // 停止所有传输
+        // 停止所有传�?
         this.isTransferring = false;
         this.dataChannels.forEach((dc) => {
             dc._isTransferring = false;
@@ -1806,7 +2006,7 @@ class FileTransferApp {
             fileTransfer.style.display = 'none';
         }
         
-        // 清理存储状态
+        // 清理存储状�?
         localStorage.removeItem('fileTransferState');
         
         // 释放资源
@@ -1814,22 +2014,30 @@ class FileTransferApp {
         this.hideBackgroundTransferTip();
         this.stopConnectionMonitoring();
         this.stopKeepAlive();
+        this.shouldRejoinRoom = false;
+        this.hasAttemptedRoomFlow = false;
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('room');
+            window.history.replaceState(null, '', url.toString());
+        } catch (e) {}
         
         // 重置标题
-        document.title = '文件传输工具';
+        document.title = 'CrossSync';
         
-        // 重新初始化
+        // 重新初始�?
         this.reconnectAttempts = 0;
         this.roomId = null;
         this.isHost = false;
         
-        // 重新检查URL参数或创建房间
+        // 重新检查URL参数或创建房�?
         setTimeout(() => {
             this.checkUrlParams();
             this.startKeepAlive();
         }, 1000);
         
-        this.updateConnectionStatus('已重置，正在重新初始化...');
+        this.updateConnectionStatus('已重置，正在重新初始�?..');
+        this.updateConnectionStatus('已重置，正在重新初始�?..', 'connecting');
         this.hideReconnectControls();
     }
     
@@ -1837,14 +2045,14 @@ class FileTransferApp {
     async attemptReconnect() {
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             console.log('达到最大重连次数，停止重连');
-            this.updateConnectionStatus('自动重连失败，请手动重连', true);
+            this.updateConnectionStatus('自动重连失败，请手动重连', 'offline');
             return;
         }
         
         this.reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000); // 指数退避，最多10秒
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000); // 指数退避，最�?0�?
         
-        console.log(`第${this.reconnectAttempts}次重连尝试，${delay}ms后重试...`);
+        console.log(`�?{this.reconnectAttempts}次重连尝试，${delay}ms后重�?..`);
         
         setTimeout(async () => {
             try {
@@ -1862,7 +2070,7 @@ class FileTransferApp {
                     });
                 });
                 
-                console.log('重连成功，正在恢复传输...');
+                console.log('重连成功，正在恢复传�?..');
                 this.reconnectAttempts = 0;
                 
                 // 隐藏重连按钮
@@ -1897,8 +2105,8 @@ class FileTransferApp {
         `;
         
         notification.innerHTML = `
-            <strong>✅ 连接已恢复</strong><br>
-            可以重新开始文件传输
+            <strong>�?连接已恢�?/strong><br>
+            可以重新开始文件传�?
         `;
         
         document.body.appendChild(notification);
@@ -1913,7 +2121,7 @@ class FileTransferApp {
     // 初始化PWA支持
     initPWA() {
         if ('serviceWorker' in navigator) {
-            // 注册 Service Worker 以支持后台运行
+            // 注册 Service Worker 以支持后台运�?
             navigator.serviceWorker.register('/sw.js').then((registration) => {
                 console.log('Service Worker 注册成功');
             }).catch((error) => {
@@ -1924,14 +2132,14 @@ class FileTransferApp {
     
     // 启动保活机制
     startKeepAlive() {
-        // 每30秒发送一次心跳
+        // �?0秒发送一次心�?
         this.keepAliveInterval = setInterval(() => {
             if (this.socket && this.socket.connected) {
                 this.socket.emit('ping');
             }
         }, 30000);
         
-        console.log('已启动心跳保活机制');
+        console.log('已启动心跳保活机�?);
     }
     
     // 停止保活机制
@@ -1939,13 +2147,13 @@ class FileTransferApp {
         if (this.keepAliveInterval) {
             clearInterval(this.keepAliveInterval);
             this.keepAliveInterval = null;
-            console.log('已停止心跳保活机制');
+            console.log('已停止心跳保活机�?);
         }
     }
     
     // 文件传输事件处理
     handleFileTransferStart(data) {
-        console.log('文件传输开始:', data);
+        console.log('文件传输开�?', data);
     }
     
     handleFileTransferProgress(data) {
@@ -1957,15 +2165,16 @@ class FileTransferApp {
     }
 }
 
-// 初始化应用
+// 初始化应�?
 let app;
 document.addEventListener('DOMContentLoaded', () => {
     app = new FileTransferApp();
 });
 
-// 防止页面刷新时丢失连接
+// 防止页面刷新时丢失连�?
 window.addEventListener('beforeunload', () => {
     if (app && app.socket) {
         app.socket.disconnect();
     }
 });
+

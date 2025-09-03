@@ -1,4 +1,4 @@
-/* 后台传输提示样式 */
+﻿/* 鍚庡彴浼犺緭鎻愮ず鏍峰紡 */
 .background-transfer-tip {
     margin-top: 20px;
     padding: 15px;
@@ -76,7 +76,7 @@
     }
 }
 
-/* 移动端优化 */
+/* 绉诲姩绔紭鍖?*/
 @media (max-width: 768px) {
     .background-transfer-tip {
         margin: 15px 0;
@@ -93,7 +93,7 @@
     }
 }
 
-/* 连接控制按钮 */
+/* 杩炴帴鎺у埗鎸夐挳 */
 .connection-controls {
     margin-top: 15px;
     display: flex;
@@ -155,7 +155,7 @@
     transform: translateY(0);
 }
 
-/* 连接状态指示器 */
+/* 杩炴帴鐘舵€佹寚绀哄櫒 */
 .connection-status-indicator {
     display: inline-block;
     width: 8px;
