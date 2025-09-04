@@ -38,3 +38,56 @@ nav .tab { margin-right:8px; }
 .grow { flex:1; }
 .bar { height:6px; background:#8883; border-radius:6px; overflow:hidden; }
 .bar > div { height:100%; background:#4caf50; width:0%; }
+
+/* -------- Visual refresh overrides -------- */
+:root { --primary:#3b82f6; --line:#8884; --muted:#888; }
+@media (prefers-color-scheme: dark){ :root{ --line:#ffffff2a; --muted:#bbb; } }
+
+.container { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+.muted { color: var(--muted); }
+.btn, .tab { border-color: var(--line); }
+.tab.active { background:#8881; }
+.summary { border-color: var(--line); background:#8881; }
+.chip { border-color: var(--line); }
+.dropzone { border-color: var(--line); border-radius:14px; padding:28px; background:linear-gradient(180deg, #ffffff06, #00000006); }
+.dropzone.dragover { background:linear-gradient(180deg, #3b82f610, #3b82f603); border-color: color-mix(in oklab, var(--primary) 70%, transparent); box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--primary) 50%, transparent); }
+.section-title { font-size: 1.1rem; }
+
+/* Segmented control for direction */
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.seg input { display:none; }
+.seg label { padding:8px 14px; cursor:pointer; user-select:none; }
+.seg input:checked + label { background: color-mix(in oklab, var(--primary) 18%, transparent); }
+.seg label + input + label { border-left:1px solid var(--line); }
+@media (max-width:640px){ .seg { width:100%; } .seg label { flex:1; text-align:center; } }
+
+/* -------- Humanized color theme -------- */
+/* Defaults follow system; allow override via html[data-theme] */
+html { background: var(--bg, #f7f8fa); color: var(--text, #0f172a); }
+:root { --bg:#f7f8fa; --card:#ffffff; --text:#0f172a; --muted:#64748b; --line:#e5e7eb; --primary:#2563eb; --primary-contrast:#ffffff; --success:#16a34a; }
+@media (prefers-color-scheme: dark){
+  :root { --bg:#0b1020; --card:#121826; --text:#e5e7eb; --muted:#94a3b8; --line:#1f2937; --primary:#60a5fa; --primary-contrast:#0b1020; --success:#22c55e; }
+}
+html[data-theme='light'] { --bg:#f7f8fa; --card:#ffffff; --text:#0f172a; --muted:#64748b; --line:#e5e7eb; --primary:#2563eb; --primary-contrast:#ffffff; --success:#16a34a; }
+html[data-theme='dark']  { --bg:#0b1020; --card:#121826; --text:#e5e7eb; --muted:#94a3b8; --line:#1f2937; --primary:#60a5fa; --primary-contrast:#0b1020; --success:#22c55e; }
+
+body { background: var(--bg); color: var(--text); }
+.card { background: var(--card); }
+.btn.primary { background: var(--primary); color: var(--primary-contrast); border-color: var(--primary); }
+.btn.primary:hover { filter: brightness(1.02); }
+.icon-btn { color: var(--text); }
+.icon-btn:hover { background: color-mix(in oklab, var(--primary) 14%, transparent); }
+.item { background: var(--card); border-color: var(--line); }
+.toolbar, .selbar { background: color-mix(in oklab, var(--bg) 80%, var(--card)); }
+
+/* Focus visibility for accessibility */
+button:focus-visible, a:focus-visible, input[type=checkbox]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+.toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; margin: 8px 0 8px; }
+.toolbar .right { display:flex; align-items:center; gap:6px; }
+.icon-btn { border:1px solid var(--line, #8884); background:transparent; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:16px; }
+.menu-wrap { position: relative; }
+.menu { position:absolute; right:0; top: calc(100% + 6px); border:1px solid var(--line, #8884); background:inherit; backdrop-filter: blur(6px); border-radius:10px; padding:6px; display:none; min-width: 160px; z-index:10; }
+.menu .menu-item { display:block; width:100%; text-align:left; padding:8px 10px; border-radius:8px; border:0; background:transparent; cursor:pointer; }
+.menu .menu-item:hover { background:#8881; }
+.menu hr { border:0; border-top:1px solid var(--line, #8884); margin:6px 0; }
+.selbar { display:flex; align-items:center; gap:8px; border:1px solid var(--line, #8884); border-radius:10px; padding:8px 10px; margin: 6px 0 12px; background:#8881; }

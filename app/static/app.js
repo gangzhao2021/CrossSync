@@ -1,21 +1,27 @@
-// Basic tab switching
-const tabUpload = document.getElementById('tab-upload');
-const tabOutbox = document.getElementById('tab-outbox');
-const panelUpload = document.getElementById('panel-upload');
-const panelOutbox = document.getElementById('panel-outbox');
+// Theme toggle
+const THEME_KEY = 'crosssync_theme';
+function applyTheme(mode){
+  if (mode === 'light' || mode === 'dark') document.documentElement.setAttribute('data-theme', mode);
+  else document.documentElement.removeAttribute('data-theme');
+}
+const themeBtn = document.getElementById('theme-toggle');
+let themeMode = localStorage.getItem(THEME_KEY) || 'auto';
+applyTheme(themeMode);
+if (themeBtn){
+  function setIcon(){ themeBtn.textContent = themeMode==='dark'?'🌙': themeMode==='light'?'🌞':'🌗'; themeBtn.title = '主题：' + (themeMode==='auto'?'跟随系统': themeMode==='light'?'浅色':'深色'); }
+  setIcon();
+  themeBtn.onclick = () => { themeMode = themeMode==='auto'?'light': themeMode==='light'?'dark':'auto'; localStorage.setItem(THEME_KEY, themeMode); applyTheme(themeMode); setIcon(); };
+}
 
-tabUpload.addEventListener('click', () => {
-  tabUpload.classList.add('active');
-  tabOutbox.classList.remove('active');
-  panelUpload.style.display = '';
-  panelOutbox.style.display = 'none';
-});
-tabOutbox.addEventListener('click', () => {
-  tabOutbox.classList.add('active');
-  tabUpload.classList.remove('active');
-  panelOutbox.style.display = '';
-  panelUpload.style.display = 'none';
-});
+// Direction toggle
+const dirToPC = document.getElementById('dir-pc');
+const dirToIphone = document.getElementById('dir-iphone');
+function currentTarget(){ return (dirToPC && dirToPC.checked) ? 'downloads' : 'outbox'; }
+// Auto default based on device
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+if (dirToPC && dirToIphone){
+  if (isMobile) dirToPC.checked = true; else dirToIphone.checked = true;
+}
 
 // Helpers
 function h(tag, attrs={}, ...children) {
@@ -50,18 +56,32 @@ const btnDelDlSelected = document.getElementById('btn-del-dl-selected');
 const btnClearDl = document.getElementById('btn-clear-dl');
 const btnSelectAllDl = document.getElementById('btn-selectall-dl');
 const btnSelectNoneDl = document.getElementById('btn-selectnone-dl');
+const selbarDl = document.getElementById('selbar-dl');
+const selcountDl = document.getElementById('selcount-dl');
 
-const dzOutbox = document.getElementById('dropzone-outbox');
-const inputOutbox = document.getElementById('input-outbox');
 const listOutbox = document.getElementById('outbox-list');
-const btnZipSelected = document.getElementById('btn-zip-selected');
-const btnZipAll = document.getElementById('btn-zip-all');
 const btnDelObSelected = document.getElementById('btn-del-ob-selected');
 const btnClearOb = document.getElementById('btn-clear-ob');
 const btnOpenOutbox = document.getElementById('btn-open-outbox');
 const btnRefreshOutbox = document.getElementById('btn-refresh-outbox');
 const btnSelectAllOb = document.getElementById('btn-selectall-ob');
 const btnSelectNoneOb = document.getElementById('btn-selectnone-ob');
+const selbarOb = document.getElementById('selbar-ob');
+const selcountOb = document.getElementById('selcount-ob');
+
+// Simple menu toggles
+document.querySelectorAll('[data-menu]')?.forEach(btn => {
+  const id = btn.getAttribute('data-menu');
+  const menu = document.getElementById(`menu-${id}`);
+  if (!menu) return;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const visible = menu.style.display === 'block';
+    document.querySelectorAll('.menu').forEach(m=>m.style.display='none');
+    menu.style.display = visible ? 'none' : 'block';
+  });
+});
+document.addEventListener('click', () => { document.querySelectorAll('.menu').forEach(m=>m.style.display='none'); });
 
 // Persist open-on-finish toggle in localStorage
 const OPEN_KEY = 'crosssync_open_on_finish';
@@ -133,27 +153,19 @@ btnClearFinished && (btnClearFinished.onclick = () => {
 function preventDefaults(e){ e.preventDefault(); e.stopPropagation(); }
 ['dragenter','dragover','dragleave','drop'].forEach(ev => {
   dzUpload.addEventListener(ev, preventDefaults, false);
-  dzOutbox.addEventListener(ev, preventDefaults, false);
 });
 ['dragenter','dragover'].forEach(ev => {
   dzUpload.addEventListener(ev, () => dzUpload.classList.add('dragover'));
-  dzOutbox.addEventListener(ev, () => dzOutbox.classList.add('dragover'));
 });
 ['dragleave','drop'].forEach(ev => {
   dzUpload.addEventListener(ev, () => dzUpload.classList.remove('dragover'));
-  dzOutbox.addEventListener(ev, () => dzOutbox.classList.remove('dragover'));
 });
 
 dzUpload.addEventListener('drop', async (e) => {
   const files = await extractDroppedFiles(e.dataTransfer);
-  handleFiles(files.length ? files : [...e.dataTransfer.files], 'downloads');
+  handleFiles(files.length ? files : [...e.dataTransfer.files], currentTarget());
 });
-dzOutbox.addEventListener('drop', async (e) => {
-  const files = await extractDroppedFiles(e.dataTransfer);
-  handleFiles(files.length ? files : [...e.dataTransfer.files], 'outbox');
-});
-inputUpload.addEventListener('change', (e) => handleFiles([...e.target.files], 'downloads'));
-inputOutbox.addEventListener('change', (e) => handleFiles([...e.target.files], 'outbox'));
+inputUpload.addEventListener('change', (e) => handleFiles([...e.target.files], currentTarget()));
 
 function handleFiles(files, target){
   for (const file of files){
@@ -322,6 +334,7 @@ async function refreshOutbox(){
     row.dataset.path = f.path;
     listOutbox.append(row);
   }
+  updateSelOb();
 }
 
 refreshOutbox();
@@ -338,6 +351,7 @@ async function refreshDownloads(){
     row.dataset.path = f.path;
     listDownloads.append(row);
   }
+  updateSelDl();
 }
 refreshDownloads();
 setInterval(refreshDownloads, 4000);
@@ -346,8 +360,38 @@ btnOpenDownloads && (btnOpenDownloads.onclick = async () => {
   try { await fetch('/api/open/downloads', {method:'POST'}); } catch(e){}
 });
 btnRefreshDownloads && (btnRefreshDownloads.onclick = () => refreshDownloads());
-btnSelectAllDl && (btnSelectAllDl.onclick = () => { listDownloads.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true); });
-btnSelectNoneDl && (btnSelectNoneDl.onclick = () => { listDownloads.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false); });
+btnSelectAllDl && (btnSelectAllDl.onclick = () => { listDownloads.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true); updateSelDl(); });
+btnSelectNoneDl && (btnSelectNoneDl.onclick = () => { listDownloads.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false); updateSelDl(); });
+document.addEventListener('change', (e)=>{
+  if (listDownloads.contains(e.target)) updateSelDl();
+  if (listOutbox.contains(e.target)) updateSelOb();
+});
+function updateSelDl(){
+  const count = listDownloads.querySelectorAll('input[type=checkbox]:checked').length;
+  selcountDl && (selcountDl.textContent = String(count));
+  selbarDl && (selbarDl.style.display = count>0 ? '' : 'none');
+}
+function updateSelOb(){
+  const count = listOutbox.querySelectorAll('input[type=checkbox]:checked').length;
+  selcountOb && (selcountOb.textContent = String(count));
+  selbarOb && (selbarOb.style.display = count>0 ? '' : 'none');
+}
+document.getElementById('btn-dl-del-quick')?.addEventListener('click', async ()=>{
+  const selected = [...listDownloads.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.closest('.item').dataset.path);
+  if (!selected.length) return;
+  if (!confirm('确定删除选中的文件吗？')) return;
+  await fetch('/api/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ area:'downloads', paths: selected })});
+  refreshDownloads();
+});
+document.getElementById('btn-dl-cancel-sel')?.addEventListener('click', ()=>{ listDownloads.querySelectorAll('input[type=checkbox]').forEach(cb=>cb.checked=false); updateSelDl(); });
+document.getElementById('btn-ob-del-quick')?.addEventListener('click', async ()=>{
+  const selected = [...listOutbox.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.closest('.item').dataset.path);
+  if (!selected.length) return;
+  if (!confirm('确定删除选中的共享箱文件吗？')) return;
+  await fetch('/api/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ area:'outbox', paths: selected })});
+  refreshOutbox();
+});
+document.getElementById('btn-ob-cancel-sel')?.addEventListener('click', ()=>{ listOutbox.querySelectorAll('input[type=checkbox]').forEach(cb=>cb.checked=false); updateSelOb(); });
 btnDelDlSelected && (btnDelDlSelected.onclick = async () => {
   const selected = [...listDownloads.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.closest('.item').dataset.path);
   if (!selected.length) return alert('请先选择文件');
@@ -369,15 +413,6 @@ btnClearDl && (btnClearDl.onclick = async () => {
   }
 })();
 
-btnZipAll.onclick = () => {
-  window.location.href = '/dl/outbox.zip';
-};
-btnZipSelected.onclick = () => {
-  const selected = [...listOutbox.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.closest('.item').dataset.path);
-  if (!selected.length) return alert('请先选择文件');
-  const q = selected.map(p => 'paths=' + encodeURIComponent(p)).join('&');
-  window.location.href = '/dl/outbox.zip?' + q;
-};
 btnDelObSelected && (btnDelObSelected.onclick = async () => {
   const selected = [...listOutbox.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.closest('.item').dataset.path);
   if (!selected.length) return alert('请先选择文件');
