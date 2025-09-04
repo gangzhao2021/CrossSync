@@ -25,6 +25,7 @@ class Settings:
 
     # Preferences
     open_on_finish_default: bool = False
+    write_sha256_sidecar: bool = True
 
     # OTP access control (optional)
     otp_enabled: bool = False
@@ -52,3 +53,13 @@ def load_env_overrides():
     if code:
         settings.otp_code = code
 
+    # Override data directories
+    dl = os.getenv("CROSSSYNC_DOWNLOADS_DIR")
+    if dl:
+        settings.downloads_dir = os.path.abspath(dl)
+    ob = os.getenv("CROSSSYNC_OUTBOX_DIR")
+    if ob:
+        settings.outbox_dir = os.path.abspath(ob)
+    w = os.getenv("CROSSSYNC_WRITE_SHA256")
+    if w is not None:
+        settings.write_sha256_sidecar = _env_truthy(w)

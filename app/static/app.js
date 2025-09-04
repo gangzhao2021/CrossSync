@@ -39,11 +39,17 @@ const dzUpload = document.getElementById('dropzone-upload');
 const inputUpload = document.getElementById('input-upload');
 const listUpload = document.getElementById('upload-list');
 const chkOpen = document.getElementById('chk-open');
+const chkDateSubdir = document.getElementById('chk-date-subdir');
+const chkVerify = document.getElementById('chk-verify');
+const btnPauseAll = document.getElementById('btn-pause-all');
+const btnResumeAll = document.getElementById('btn-resume-all');
 const listDownloads = document.getElementById('downloads-list');
 const btnOpenDownloads = document.getElementById('btn-open-downloads');
 const btnRefreshDownloads = document.getElementById('btn-refresh-downloads');
 const btnDelDlSelected = document.getElementById('btn-del-dl-selected');
 const btnClearDl = document.getElementById('btn-clear-dl');
+const btnSelectAllDl = document.getElementById('btn-selectall-dl');
+const btnSelectNoneDl = document.getElementById('btn-selectnone-dl');
 
 const dzOutbox = document.getElementById('dropzone-outbox');
 const inputOutbox = document.getElementById('input-outbox');
@@ -52,11 +58,77 @@ const btnZipSelected = document.getElementById('btn-zip-selected');
 const btnZipAll = document.getElementById('btn-zip-all');
 const btnDelObSelected = document.getElementById('btn-del-ob-selected');
 const btnClearOb = document.getElementById('btn-clear-ob');
+const btnOpenOutbox = document.getElementById('btn-open-outbox');
+const btnRefreshOutbox = document.getElementById('btn-refresh-outbox');
+const btnSelectAllOb = document.getElementById('btn-selectall-ob');
+const btnSelectNoneOb = document.getElementById('btn-selectnone-ob');
 
 // Persist open-on-finish toggle in localStorage
 const OPEN_KEY = 'crosssync_open_on_finish';
 chkOpen.checked = localStorage.getItem(OPEN_KEY) === '1';
 chkOpen.addEventListener('change', () => localStorage.setItem(OPEN_KEY, chkOpen.checked ? '1' : '0'));
+const DATE_SUBDIR_KEY = 'crosssync_date_subdir';
+chkDateSubdir.checked = localStorage.getItem(DATE_SUBDIR_KEY) === '1';
+chkDateSubdir.addEventListener('change', () => localStorage.setItem(DATE_SUBDIR_KEY, chkDateSubdir.checked ? '1' : '0'));
+const VERIFY_KEY = 'crosssync_verify_chunks';
+chkVerify.checked = localStorage.getItem(VERIFY_KEY) === '1';
+chkVerify.addEventListener('change', () => localStorage.setItem(VERIFY_KEY, chkVerify.checked ? '1' : '0'));
+
+// Global task registry for pause/resume all
+window.CS_TASKS = window.CS_TASKS || [];
+btnPauseAll && (btnPauseAll.onclick = () => { window.CS_TASKS.forEach(t => t.pause && t.pause()); });
+btnResumeAll && (btnResumeAll.onclick = () => { window.CS_TASKS.forEach(t => t.resume && t.resume()); });
+
+// Summary elements and updater
+const elActive = document.getElementById('sum-active');
+const elCompleted = document.getElementById('sum-completed');
+const elFailed = document.getElementById('sum-failed');
+const elSpeed = document.getElementById('sum-speed');
+const elEta = document.getElementById('sum-eta');
+const elSumBar = document.getElementById('sum-bar');
+const btnClearFinished = document.getElementById('btn-clear-finished');
+let TASK_SEQ = 0;
+let lastAggBytes = 0, lastAggTime = performance.now();
+function updateSummary(){
+  const tasks = window.CS_TASKS;
+  let active = 0, completed = 0, failed = 0, total = 0, uploaded = 0;
+  tasks.forEach(t => {
+    total += t.size || 0;
+    uploaded += (t.uploaded || 0);
+    if (t.state === 'failed') failed++;
+    else if (t.state === 'completed' || t.state === 'cancelled') completed++;
+    else active++;
+  });
+  const now = performance.now();
+  const deltaBytes = Math.max(0, uploaded - lastAggBytes);
+  const deltaTime = Math.max(0.001, (now - lastAggTime) / 1000);
+  const speed = deltaBytes / deltaTime;
+  lastAggBytes = uploaded; lastAggTime = now;
+  const remaining = Math.max(0, total - uploaded);
+  const eta = speed > 0 ? (remaining / speed) : 0;
+  elActive && (elActive.textContent = active);
+  elCompleted && (elCompleted.textContent = completed);
+  elFailed && (elFailed.textContent = failed);
+  elSpeed && (elSpeed.textContent = `${formatBytes(speed)}/s`);
+  elEta && (elEta.textContent = eta ? `${eta.toFixed(1)}s` : '—');
+  const pct = total > 0 ? Math.min(100, (uploaded / total) * 100) : 0;
+  elSumBar && (elSumBar.style.width = pct.toFixed(2) + '%');
+}
+setInterval(updateSummary, 1000);
+
+btnClearFinished && (btnClearFinished.onclick = () => {
+  const tasks = window.CS_TASKS;
+  const remains = [];
+  tasks.forEach(t => {
+    if (t.state === 'completed'){
+      const el = document.querySelector(`[data-task-id="${t.id}"]`);
+      if (el) el.remove();
+    } else {
+      remains.push(t);
+    }
+  });
+  window.CS_TASKS = remains;
+});
 
 function preventDefaults(e){ e.preventDefault(); e.stopPropagation(); }
 ['dragenter','dragover','dragleave','drop'].forEach(ev => {
@@ -94,6 +166,7 @@ function createItem(name, size){
   const sizeSpan = h('span', {class:'muted'}, `0 / ${formatBytes(size)}`);
   const speedSpan = h('span', {class:'muted'}, '0 MB/s');
   const etaSpan = h('span', {class:'muted'}, '—');
+  const hashSpan = h('span', {class:'muted'}, '');
   const btnPause = h('button', {class:'tab'}, '暂停');
   const btnResume = h('button', {class:'tab'}, '继续');
   const btnCancel = h('button', {class:'tab'}, '取消');
@@ -101,9 +174,10 @@ function createItem(name, size){
   const item = h('div', {class:'item'},
     h('div', {class:'row'}, h('div', {class:'grow'}, name), sizeSpan),
     h('div', {class:'bar'}, barInner),
-    h('div', {class:'row'}, speedSpan, etaSpan, h('div', {class:'grow'}, ''), btnPause, btnResume, btnCancel)
+    h('div', {class:'row'}, speedSpan, etaSpan, h('div', {class:'grow'}, ''), btnPause, btnResume, btnCancel),
+    h('div', {class:'row'}, hashSpan)
   );
-  return { item, barInner, sizeSpan, speedSpan, etaSpan, btnPause, btnResume, btnCancel };
+  return { item, barInner, sizeSpan, speedSpan, etaSpan, hashSpan, btnPause, btnResume, btnCancel };
 }
 
 async function startUpload(file, target){
@@ -111,9 +185,21 @@ async function startUpload(file, target){
   (target === 'downloads' ? listUpload : listOutbox).prepend(ui.item);
 
   // Init or resume
+  // build name with optional date subdir
+  let relName = file.relativePath || file.webkitRelativePath || file.name;
+  if (localStorage.getItem(DATE_SUBDIR_KEY) === '1'){
+    try {
+      const d = new Date(file.lastModified || Date.now());
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      relName = `${y}-${m}-${day}/` + relName.split('/').pop();
+    } catch(e){}
+  }
+
   const initRes = await fetch('/api/init-upload', {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ name: file.relativePath || file.webkitRelativePath || file.name, size: file.size, chunk_size: DEFAULT_CHUNK, last_modified: file.lastModified, target })
+    body: JSON.stringify({ name: relName, size: file.size, chunk_size: DEFAULT_CHUNK, last_modified: file.lastModified, target })
   }).then(r=>r.json());
 
   const uploadId = initRes.upload_id;
@@ -138,6 +224,12 @@ async function startUpload(file, target){
   ui.btnResume.onclick = () => { paused = false; ui.btnPause.disabled = false; ui.btnResume.disabled = true; };
   ui.btnCancel.onclick = () => { cancelled = true; paused = false; controllers.forEach(c => { try { c.abort(); } catch(_){} }); };
 
+  // Register to global task list
+  const taskId = (++TASK_SEQ);
+  ui.item.dataset.taskId = String(taskId);
+  const task = { id: taskId, pause: ()=>ui.btnPause.onclick(), resume: ()=>ui.btnResume.onclick(), cancel: ()=>ui.btnCancel.onclick(), size: file.size, get uploaded(){ return uploadedBytes; }, state:'active' };
+  window.CS_TASKS.push(task);
+
   const concurrency = Math.max(1, Math.min(MAX_CONCURRENCY, 4));
   let nextIndex = 0;
 
@@ -161,15 +253,33 @@ async function startUpload(file, target){
       const chunk = file.slice(start, end);
       const controller = new AbortController();
       controllers.add(controller);
-      try {
-        await fetch(`/api/upload/${uploadId}/${idx}`, { method:'PUT', body: chunk, signal: controller.signal });
-      } catch (e) {
-        controllers.delete(controller);
-        if (cancelled) return; // stop
-        if (paused) continue; // retry on resume
-        throw e; // unexpected error
+      // retry with exponential backoff up to 5 times
+      let attempt = 0, ok = false, lastErr;
+      while(attempt < 5 && !ok){
+        try {
+          let body = chunk;
+          const verify = (localStorage.getItem(VERIFY_KEY) === '1');
+          const headers = {};
+          if (verify && window.crypto && crypto.subtle){
+            const buf = await chunk.arrayBuffer();
+            const digest = await crypto.subtle.digest('SHA-256', buf);
+            const hex = [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');
+            headers['x-sha256'] = hex;
+            body = buf;
+          }
+          await fetch(`/api/upload/${uploadId}/${idx}`, { method:'PUT', headers, body, signal: controller.signal });
+          ok = true;
+        } catch (e) {
+          lastErr = e;
+          if (cancelled) break;
+          if (paused) { await new Promise(r=>setTimeout(r,200)); continue; }
+          const delay = Math.min(2000, 150 * Math.pow(2, attempt));
+          await new Promise(r=>setTimeout(r, delay));
+          attempt++;
+        }
       }
       controllers.delete(controller);
+      if (!ok){ if (cancelled) return; throw lastErr || new Error('upload failed'); }
       missing.delete(idx);
       uploadedBytes += (end - start);
       // update UI
@@ -185,13 +295,20 @@ async function startUpload(file, target){
     }
   }
 
-  await Promise.all(queue);
-  if (cancelled) { ui.etaSpan.textContent = '已取消'; return; }
-  const open = (localStorage.getItem(OPEN_KEY) === '1');
-  await fetch(`/api/finish-upload/${uploadId}?open=${open?1:0}`, { method:'POST' });
-  ui.barInner.style.width = '100%';
-  ui.etaSpan.textContent = '完成';
-  if (target === 'downloads') refreshDownloads(); else refreshOutbox();
+  try {
+    await Promise.all(queue);
+    if (cancelled) { ui.etaSpan.textContent = '已取消'; task.state='cancelled'; return; }
+    const open = (localStorage.getItem(OPEN_KEY) === '1');
+    const finishRes = await fetch(`/api/finish-upload/${uploadId}?open=${open?1:0}`, { method:'POST' }).then(r=>r.json()).catch(()=>({}));
+    ui.barInner.style.width = '100%';
+    ui.etaSpan.textContent = '完成';
+    if (finishRes && finishRes.sha256){ ui.hashSpan.textContent = 'SHA-256: ' + finishRes.sha256; }
+    task.state = 'completed';
+    if (target === 'downloads') refreshDownloads(); else refreshOutbox();
+  } catch (e) {
+    ui.etaSpan.textContent = '失败';
+    task.state = 'failed';
+  }
 }
 
 async function refreshOutbox(){
@@ -229,6 +346,8 @@ btnOpenDownloads && (btnOpenDownloads.onclick = async () => {
   try { await fetch('/api/open/downloads', {method:'POST'}); } catch(e){}
 });
 btnRefreshDownloads && (btnRefreshDownloads.onclick = () => refreshDownloads());
+btnSelectAllDl && (btnSelectAllDl.onclick = () => { listDownloads.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true); });
+btnSelectNoneDl && (btnSelectNoneDl.onclick = () => { listDownloads.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false); });
 btnDelDlSelected && (btnDelDlSelected.onclick = async () => {
   const selected = [...listDownloads.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.closest('.item').dataset.path);
   if (!selected.length) return alert('请先选择文件');
@@ -313,3 +432,7 @@ async function extractDroppedFiles(dt){
     }
   }
 }
+btnOpenOutbox && (btnOpenOutbox.onclick = async () => { try { await fetch('/api/open/outbox', {method:'POST'});} catch(e){} });
+btnRefreshOutbox && (btnRefreshOutbox.onclick = () => refreshOutbox());
+btnSelectAllOb && (btnSelectAllOb.onclick = () => { listOutbox.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true); });
+btnSelectNoneOb && (btnSelectNoneOb.onclick = () => { listOutbox.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false); });

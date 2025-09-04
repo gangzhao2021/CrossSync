@@ -19,8 +19,8 @@ from .utils import get_lan_ip, safe_join, file_fingerprint
 from .uploader import UploadStore, UploadMeta
 
 
-ensure_dirs()
 load_env_overrides()
+ensure_dirs()
 app = FastAPI(title=settings.app_name)
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -165,7 +165,15 @@ async def init_upload(payload: dict = Body(...)):
 @app.put("/api/upload/{upload_id}/{chunk_index}")
 async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
     meta = upload_store.get_meta(upload_id)
+    # Try reading body; for now we read into memory (chunk-sized)
     data = await request.body()
+    # Optional integrity check via x-sha256 header
+    hdr = request.headers.get('x-sha256')
+    if hdr:
+        import hashlib
+        h = hashlib.sha256(data).hexdigest()
+        if h.lower() != hdr.lower():
+            raise HTTPException(status_code=400, detail="chunk checksum mismatch")
     # Allow last chunk to be smaller
     expected = meta.chunk_size
     if chunk_index == meta.total_chunks - 1:
@@ -188,7 +196,11 @@ async def upload_status(upload_id: str):
 
 @app.post("/api/finish-upload/{upload_id}")
 async def finish_upload(upload_id: str, request: Request):
-    final_path = upload_store.assemble(upload_id)
+    result = upload_store.assemble(upload_id)
+    if "|sha256:" in result:
+        final_path, sha = result.split("|sha256:", 1)
+    else:
+        final_path, sha = result, None
     # Optionally open folder on Windows host
     open_flag = request.query_params.get("open")
     if open_flag and open_flag not in ("0", "false", "False"):
@@ -198,7 +210,15 @@ async def finish_upload(upload_id: str, request: Request):
                 os.startfile(folder)
         except Exception:
             pass
-    return ORJSONResponse({"saved": final_path})
+    # Write sidecar checksum file
+    if sha and settings.write_sha256_sidecar:
+        try:
+            sidecar = final_path + ".sha256"
+            with open(sidecar, "w", encoding="utf-8") as f:
+                f.write(f"{sha}  {os.path.basename(final_path)}\n")
+        except Exception:
+            pass
+    return ORJSONResponse({"saved": final_path, "sha256": sha})
 
 
 def iter_files_within(base_dir: str):
@@ -231,6 +251,21 @@ async def open_downloads_folder():
             os.startfile(settings.downloads_dir)
     except Exception:
         pass
+    return ORJSONResponse({"ok": True})
+
+
+@app.post("/api/open/outbox")
+async def open_outbox_folder():
+    try:
+        if os.name == "nt":
+            os.startfile(settings.outbox_dir)
+    except Exception:
+        pass
+    return ORJSONResponse({"ok": True})
+
+
+@app.get("/healthz")
+async def healthz():
     return ORJSONResponse({"ok": True})
 
 

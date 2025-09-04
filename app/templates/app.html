@@ -17,12 +17,29 @@
     </header>
 
     <section id="panel-upload">
+      <div class="summary">
+        <div class="row" style="gap:8px; flex-wrap: wrap;">
+          <div class="chip">进行中 <strong id="sum-active">0</strong></div>
+          <div class="chip">已完成 <strong id="sum-completed">0</strong></div>
+          <div class="chip">失败 <strong id="sum-failed">0</strong></div>
+          <div class="chip">速度 <strong id="sum-speed">0 B/s</strong></div>
+          <div class="chip">ETA <strong id="sum-eta">—</strong></div>
+          <button id="btn-clear-finished" class="btn">清理已完成</button>
+        </div>
+        <div class="bar" style="margin-top:8px;"><div id="sum-bar" style="width:0%"></div></div>
+      </div>
       <div class="dropzone" id="dropzone-upload">
         <p>拖拽文件到此，或 <label class="link"><input id="input-upload" type="file" multiple hidden />点击选择</label></p>
         <p class="muted">支持断点续传、并发分片上传</p>
       </div>
-      <div class="row" style="gap:16px; margin: 8px 0 16px;">
+      <div class="row opt-grid" style="gap:8px; margin: 8px 0 8px;">
         <label><input type="checkbox" id="chk-open" /> 完成后在电脑上打开文件夹</label>
+        <label><input type="checkbox" id="chk-date-subdir" /> 按日期归档到子目录</label>
+        <label><input type="checkbox" id="chk-verify" /> 校验上传完整性</label>
+      </div>
+      <div class="row" style="gap:8px; margin: 0 0 16px; flex-wrap: wrap;">
+        <button id="btn-pause-all" class="btn">暂停全部</button>
+        <button id="btn-resume-all" class="btn">继续全部</button>
       </div>
       <div id="upload-list"></div>
       <h3 style="margin-top:24px;">接收的文件</h3>
@@ -31,6 +48,8 @@
         <button id="btn-refresh-downloads" class="btn">刷新</button>
         <button id="btn-del-dl-selected" class="btn">删除选中</button>
         <button id="btn-clear-dl" class="btn">清空接收目录</button>
+        <button id="btn-selectall-dl" class="btn">全选</button>
+        <button id="btn-selectnone-dl" class="btn">全不选</button>
       </div>
       <div id="downloads-list"></div>
     </section>
@@ -45,6 +64,10 @@
         <button id="btn-zip-all" class="tab btn-wide">下载全部为 ZIP</button>
         <button id="btn-del-ob-selected" class="tab btn-wide">删除选中</button>
         <button id="btn-clear-ob" class="tab btn-wide">清空共享箱</button>
+        <button id="btn-open-outbox" class="btn">打开共享箱目录</button>
+        <button id="btn-refresh-outbox" class="btn">刷新</button>
+        <button id="btn-selectall-ob" class="btn">全选</button>
+        <button id="btn-selectnone-ob" class="btn">全不选</button>
       </div>
       <div id="outbox-list"></div>
     </section>

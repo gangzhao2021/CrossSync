@@ -94,18 +94,25 @@ class UploadStore:
         rel = sanitize_rel_path(meta.name)
         final_path = unique_path_nested(target_dir, rel)
 
-        # Append chunks in order
+        import hashlib
+        sha256 = hashlib.sha256()
+        # Append chunks in order and compute hash
         with open(final_path, "wb") as out:
             for idx in range(meta.total_chunks):
                 cp = self.chunk_path(upload_id, idx)
                 if not os.path.isfile(cp):
                     raise HTTPException(status_code=400, detail=f"missing chunk {idx}")
                 with open(cp, "rb") as cf:
-                    shutil.copyfileobj(cf, out, length=1024 * 1024)
+                    while True:
+                        buf = cf.read(1024 * 1024)
+                        if not buf:
+                            break
+                        sha256.update(buf)
+                        out.write(buf)
 
         # Cleanup session
         shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
-        return final_path
+        return final_path + "|sha256:" + sha256.hexdigest()
 
     def missing_chunks(self, upload_id: str) -> List[int]:
         meta = self.get_meta(upload_id)
