@@ -22,13 +22,13 @@ struct RootView: View {
 
                     switch model.phase {
                     case .ready:
-                        ReadyView(selection: $selection)
+                        ReadyView(selection: $selection, onStart: startSelection)
                     case .preparing:
                         PreparingView()
                     case .uploading:
                         UploadingView()
                     case .complete:
-                        CompleteView(selection: $selection)
+                        CompleteView(selection: $selection, onStart: startSelection)
                     case .failed:
                         FailedView()
                     }
@@ -38,12 +38,6 @@ struct RootView: View {
             }
         }
         .task { await model.refreshConnection() }
-        .onChange(of: selection) { _, newSelection in
-            guard !newSelection.isEmpty else { return }
-            let selectedItems = newSelection
-            selection = []
-            model.start(items: selectedItems)
-        }
         .onChange(of: scenePhase) { _, value in
             if value == .active { model.applicationBecameActive() }
         }
@@ -52,11 +46,19 @@ struct RootView: View {
                 .environmentObject(model)
         }
     }
+
+    private func startSelection() {
+        guard !selection.isEmpty else { return }
+        let selectedItems = selection
+        selection = []
+        model.start(items: selectedItems)
+    }
 }
 
 private struct ReadyView: View {
     @EnvironmentObject private var model: TransferViewModel
     @Binding var selection: [PhotosPickerItem]
+    let onStart: () -> Void
 
     var body: some View {
         VStack(spacing: 24) {
@@ -84,18 +86,12 @@ private struct ReadyView: View {
                 }
             }
 
-            PhotosPicker(
+            PhotoSelectionControls(
                 selection: $selection,
-                maxSelectionCount: 200,
-                selectionBehavior: .continuousAndOrdered,
-                matching: .any(of: [.images, .videos]),
-                preferredItemEncoding: .current,
-                photoLibrary: PHPhotoLibrary.shared()
-            ) {
-                PrimaryActionLabel(title: "选择照片")
-            }
-            .disabled(!model.isConnected)
-            .opacity(model.isConnected ? 1 : 0.55)
+                enabled: model.isConnected,
+                pickerTitle: "选择照片",
+                onStart: onStart
+            )
 
             CrossSyncCard {
                 VStack(alignment: .leading, spacing: 10) {
@@ -255,6 +251,7 @@ private struct UploadingView: View {
 private struct CompleteView: View {
     @EnvironmentObject private var model: TransferViewModel
     @Binding var selection: [PhotosPickerItem]
+    let onStart: () -> Void
 
     var body: some View {
         VStack(spacing: 24) {
@@ -280,16 +277,13 @@ private struct CompleteView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            PhotosPicker(
+            PhotoSelectionControls(
                 selection: $selection,
-                maxSelectionCount: 200,
-                selectionBehavior: .continuousAndOrdered,
-                matching: .any(of: [.images, .videos]),
-                preferredItemEncoding: .current,
-                photoLibrary: PHPhotoLibrary.shared()
-            ) {
-                PrimaryActionLabel(title: "再选一批", success: true)
-            }
+                enabled: true,
+                pickerTitle: "再选一批",
+                success: true,
+                onStart: onStart
+            )
 
             CrossSyncCard {
                 HStack(spacing: 14) {
@@ -305,6 +299,67 @@ private struct CompleteView: View {
                             .foregroundStyle(Color.crossSyncSecondaryText)
                     }
                 }
+            }
+        }
+    }
+}
+
+private struct PhotoSelectionControls: View {
+    @Binding var selection: [PhotosPickerItem]
+    let enabled: Bool
+    let pickerTitle: String
+    var success = false
+    let onStart: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            if !selection.isEmpty {
+                CrossSyncCard(accent: .crossSyncCyan) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "photo.stack.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.crossSyncCyan)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("已选择 \(selection.count) 项")
+                                .font(.headline)
+                            Text("确认后才会开始上传")
+                                .font(.caption)
+                                .foregroundStyle(Color.crossSyncSecondaryText)
+                        }
+                        Spacer()
+                        Button {
+                            selection = []
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(Color.crossSyncSecondaryText)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("清除选择")
+                    }
+                }
+            }
+
+            PhotosPicker(
+                selection: $selection,
+                maxSelectionCount: 200,
+                selectionBehavior: .continuousAndOrdered,
+                matching: .any(of: [.images, .videos]),
+                preferredItemEncoding: .current,
+                photoLibrary: PHPhotoLibrary.shared()
+            ) {
+                PrimaryActionLabel(title: selection.isEmpty ? pickerTitle : "继续选择", success: success && selection.isEmpty)
+            }
+            .disabled(!enabled)
+            .opacity(enabled ? 1 : 0.55)
+
+            if !selection.isEmpty {
+                Button(action: onStart) {
+                    PrimaryActionLabel(title: "开始上传 \(selection.count) 项", success: true)
+                }
+                .buttonStyle(.plain)
+                .disabled(!enabled)
+                .opacity(enabled ? 1 : 0.55)
             }
         }
     }
