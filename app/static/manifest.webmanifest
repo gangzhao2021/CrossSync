@@ -1,0 +1,16 @@
+{
+  "name": "CrossSync 局域网互传",
+  "short_name": "CrossSync",
+  "description": "在 iPhone 与电脑之间直接传输文件",
+  "lang": "zh-CN",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f6f2",
+  "theme_color": "#143d35",
+  "icons": [
+    {"src": "/static/app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/static/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}

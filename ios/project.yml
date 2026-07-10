@@ -1,0 +1,42 @@
+name: CrossSyncMobile
+
+options:
+  bundleIdPrefix: com.crosssync
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  CrossSyncMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: CrossSyncMobile
+    info:
+      path: CrossSyncMobile/Resources/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.crosssync.mobile
+        PRODUCT_NAME: CrossSync
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1"
+
+  CrossSyncMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: CrossSyncMobileTests
+    dependencies:
+      - target: CrossSyncMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.crosssync.mobile.tests
+        GENERATE_INFOPLIST_FILE: YES
+

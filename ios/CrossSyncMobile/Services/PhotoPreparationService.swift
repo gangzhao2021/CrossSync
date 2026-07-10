@@ -1,0 +1,201 @@
+import CoreTransferable
+import Foundation
+import PhotosUI
+import UniformTypeIdentifiers
+
+private struct ImportedPhotoFile: Transferable, Sendable {
+    let url: URL
+    let originalName: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .image) { received in
+            try Self.importFile(received)
+        }
+        FileRepresentation(importedContentType: .movie) { received in
+            try Self.importFile(received)
+        }
+    }
+
+    private static func importFile(_ received: ReceivedTransferredFile) throws -> ImportedPhotoFile {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CrossSyncPicker", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let ext = received.file.pathExtension
+        let filename = ext.isEmpty ? UUID().uuidString : "\(UUID().uuidString).\(ext)"
+        let destination = directory.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.copyItem(at: received.file, to: destination)
+        return ImportedPhotoFile(url: destination, originalName: received.file.lastPathComponent)
+    }
+}
+
+struct PhotoPreparationService {
+    func prepare(
+        items: [PhotosPickerItem],
+        onProgress: @MainActor (_ completed: Int, _ total: Int, _ currentName: String) -> Void
+    ) async throws -> [PreparedAsset] {
+        guard !items.isEmpty else { return [] }
+        Self.resetWorkingDirectories()
+        await onProgress(0, items.count, "正在请求原片")
+
+        var prepared = [PreparedAsset?](repeating: nil, count: items.count)
+        var nextIndex = 0
+        var completed = 0
+        let concurrency = min(4, items.count)
+
+        do {
+            try await withThrowingTaskGroup(of: (Int, PreparedAsset).self) { group in
+                func enqueue(_ index: Int) {
+                    let item = items[index]
+                    group.addTask {
+                        (index, try await Self.prepareOne(item: item, index: index))
+                    }
+                }
+
+                while nextIndex < concurrency {
+                    enqueue(nextIndex)
+                    nextIndex += 1
+                }
+
+                while let (index, asset) = try await group.next() {
+                    prepared[index] = asset
+                    completed += 1
+                    await onProgress(completed, items.count, asset.name)
+                    if nextIndex < items.count {
+                        enqueue(nextIndex)
+                        nextIndex += 1
+                    }
+                }
+            }
+        } catch {
+            Self.resetWorkingDirectories()
+            throw error
+        }
+
+        return prepared.compactMap { $0 }
+    }
+
+    static func cleanup(_ assets: [PreparedAsset]) {
+        for asset in assets {
+            try? FileManager.default.removeItem(at: asset.url)
+        }
+    }
+
+    private static func prepareOne(item: PhotosPickerItem, index: Int) async throws -> PreparedAsset {
+        try Task.checkCancellation()
+        let kind = Self.kind(for: item.supportedContentTypes)
+        let fallbackName = Self.fallbackName(
+            kind: kind,
+            index: index,
+            types: item.supportedContentTypes,
+            itemIdentifier: item.itemIdentifier
+        )
+        guard let imported = try await item.loadTransferable(type: ImportedPhotoFile.self) else {
+            throw PhotoPreparationError.unavailable(index: index + 1)
+        }
+        try Task.checkCancellation()
+
+        let uploadName = Self.uploadName(originalName: imported.originalName, fallbackName: fallbackName)
+        let finalURL = try Self.moveToPreparedDirectory(
+            imported.url,
+            uploadName: uploadName,
+            preferredType: item.supportedContentTypes.first
+        )
+        let values = try finalURL.resourceValues(forKeys: [.fileSizeKey])
+        return PreparedAsset(
+            id: UUID(),
+            url: finalURL,
+            name: uploadName,
+            size: Int64(values.fileSize ?? 0),
+            // PhotosPicker may export a fresh temporary file each time. Zero keeps
+            // the server fingerprint stable so selecting the same asset can resume.
+            lastModifiedMilliseconds: 0,
+            kind: kind
+        )
+    }
+
+    private static func moveToPreparedDirectory(
+        _ source: URL,
+        uploadName: String,
+        preferredType: UTType?
+    ) throws -> URL {
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CrossSyncPrepared", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let sourceExtension = source.pathExtension
+        let fallbackExtension = preferredType?.preferredFilenameExtension ?? "bin"
+        let filename: String
+        if sourceExtension.isEmpty {
+            filename = URL(fileURLWithPath: uploadName).deletingPathExtension().lastPathComponent + "." + fallbackExtension
+        } else {
+            filename = URL(fileURLWithPath: uploadName).deletingPathExtension().lastPathComponent + "." + sourceExtension
+        }
+
+        let destination = directory.appendingPathComponent("\(UUID().uuidString)-\(filename)")
+        try FileManager.default.moveItem(at: source, to: destination)
+        return destination
+    }
+
+    private static func kind(for types: [UTType]) -> AssetKind {
+        if types.contains(where: { $0.conforms(to: .image) }) { return .photo }
+        if types.contains(where: { $0.conforms(to: .movie) || $0.conforms(to: .video) }) { return .video }
+        return .other
+    }
+
+    private static func fallbackName(
+        kind: AssetKind,
+        index: Int,
+        types: [UTType],
+        itemIdentifier: String?
+    ) -> String {
+        let prefix = kind == .video ? "VID" : "IMG"
+        let ext = types.first?.preferredFilenameExtension ?? (kind == .video ? "mov" : "heic")
+        if let itemIdentifier, !itemIdentifier.isEmpty {
+            let stable = Data(itemIdentifier.utf8)
+                .base64EncodedString()
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "=", with: "")
+            return "\(prefix)_\(stable.prefix(24)).\(ext)"
+        }
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1_000)
+        return String(format: "%@_%lld_%03d.%@", prefix, timestamp, index + 1, ext)
+    }
+
+    private static func uploadName(originalName: String, fallbackName: String) -> String {
+        let candidate = URL(fileURLWithPath: originalName).lastPathComponent
+        let stem = URL(fileURLWithPath: candidate).deletingPathExtension().lastPathComponent
+        let looksLikeTemporaryUUID = UUID(uuidString: stem) != nil
+        guard
+            !candidate.isEmpty,
+            candidate != ".",
+            candidate.lowercased() != "file",
+            !looksLikeTemporaryUUID
+        else { return fallbackName }
+        return candidate
+    }
+
+    private static func resetWorkingDirectories() {
+        let directories = [
+            FileManager.default.temporaryDirectory.appendingPathComponent("CrossSyncPicker", isDirectory: true),
+            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("CrossSyncPrepared", isDirectory: true)
+        ]
+        for directory in directories {
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+}
+
+enum PhotoPreparationError: LocalizedError {
+    case unavailable(index: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let index):
+            return "第 \(index) 项无法从照片库读取。请确认原片已从 iCloud 下载，或稍后重试。"
+        }
+    }
+}

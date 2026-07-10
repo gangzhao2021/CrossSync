@@ -1,25 +1,49 @@
 <!doctype html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#143d35" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>CrossSync - QR</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/static/app-icon-180.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260709-securepwa2" />
 </head>
 <body>
-  <div class="container">
-    <h1>CrossSync</h1>
-    <p>用 iPhone 扫描下方二维码，在同一局域网内访问：</p>
-    <div class="qr">
-      <img src="/qr.png?sid={{ sid }}" alt="QR" />
-    </div>
-    <p class="muted">或在 Safari 打开：<code>{{ lan_url }}</code></p>
-    {% if otp_enabled %}
-    <p>一次性访问码：<strong>{{ otp }}</strong></p>
-    {% endif %}
-    <p><a class="btn" href="{{ lan_url }}">打开 Web 应用</a></p>
-    <p class="muted">提示：手机扫码后，本页面将自动跳转到 Web 应用。</p>
-  </div>
+  <main class="qr-shell">
+    <section class="qr-card">
+      <div class="brand qr-brand">
+        <div class="brand-mark">CS</div>
+        <div>
+          <h1>CrossSync</h1>
+          <p>iPhone 与 Windows/macOS 局域网互传</p>
+        </div>
+      </div>
+      <div class="qr-grid">
+        <div class="qr-box">
+          <img src="/qr.png?sid={{ sid }}" alt="CrossSync QR code" />
+        </div>
+        <div class="qr-copy">
+          <h2>扫码连接</h2>
+          <p>电脑与 iPhone 需要在同一个局域网内。</p>
+          <code>{{ lan_url }}</code>
+          {% if otp_enabled %}
+          <p class="otp">访问码：<strong>{{ otp }}</strong></p>
+          {% endif %}
+          <a class="btn primary" href="{{ lan_url }}">打开工作台</a>
+          {% if ca_available and is_https %}
+          <div class="certificate-setup">
+            <strong>iPhone 首次使用 HTTPS</strong>
+            <p>先安装本地信任证书，再到“设置 → 通用 → 关于本机 → 证书信任设置”开启完全信任。</p>
+            <a class="btn" href="/ca.crt">下载 CrossSync 证书</a>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+  </main>
   <script>
     const sid = "{{ sid }}";
     const redirectUrl = "{{ lan_url }}";
