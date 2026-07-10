@@ -9,6 +9,8 @@ env/
 
 # Local data and temp
 data/
+certs/
+audit/
 *.zip
 *.log
 
@@ -19,3 +21,8 @@ data/
 # OS files
 Thumbs.db
 .DS_Store
+
+# Generated Apple project state
+ios/*.xcodeproj/
+ios/DerivedData/
+ios/**/xcuserdata/

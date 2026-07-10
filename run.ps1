@@ -1,8 +1,11 @@
 param(
   [int]$Port = 8008,
   [switch]$Https,
+  [switch]$Http,
+  [switch]$RegenerateCertificate,
   [switch]$EnableOtp,
-  [string]$OtpCode
+  [string]$OtpCode,
+  [string]$LanHost
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,19 +33,35 @@ if (!(Test-Path $venvPython)) { Write-Error 'Virtual env python not found. Venv 
 # Prepare environment for OTP
 if ($EnableOtp) { $env:CROSSSYNC_ENABLE_OTP = '1' }
 if ($OtpCode) { $env:CROSSSYNC_OTP_CODE = $OtpCode }
+if ($LanHost) { $env:CROSSSYNC_LAN_HOST = $LanHost }
 
-# Determine protocol and launch
+# HTTPS is the default because iPhone Screen Wake Lock and PWA installation
+# require a secure context. Use -Http only as an explicit compatibility mode.
+if ($Https -and $Http) { Write-Error 'Use either -Https or -Http, not both.'; exit 1 }
+$useHttps = -not $Http
+if ($Https) { $useHttps = $true }
+
 $proto = 'http'
 $uvicornArgs = @('app.main:app', '--host', '0.0.0.0', '--port', "$Port")
-if ($Https) {
+if ($useHttps) {
   $certDir = Join-Path $PSScriptRoot 'certs'
   $certFile = Join-Path $certDir 'cert.pem'
   $keyFile = Join-Path $certDir 'key.pem'
+  $certHost = $LanHost
+  if (-not $certHost) {
+    $certHost = (& $venvPython -c "from app.utils import get_lan_ip; print(get_lan_ip())").Trim()
+  }
+  $setupHttps = Join-Path $PSScriptRoot 'scripts/setup-https.ps1'
+  if (Test-Path -LiteralPath $setupHttps) {
+    & $setupHttps -LanHost $certHost -Force:$RegenerateCertificate
+  }
   if ((Test-Path $certFile) -and (Test-Path $keyFile)) {
     $proto = 'https'
     $uvicornArgs = @('app.main:app', '--host', '0.0.0.0', '--port', "$Port", '--ssl-certfile', $certFile, '--ssl-keyfile', $keyFile)
+    Write-Host "HTTPS enabled for $certHost."
+    Write-Host "First iPhone setup: open the QR link, install /ca.crt, then enable full trust for 'CrossSync Local CA'."
   } else {
-    Write-Warning "Https requested but certs not found in $certDir. Falling back to http."
+    Write-Warning "HTTPS certificate setup failed. Falling back to HTTP; iPhone native wake lock may be unavailable."
   }
 }
 

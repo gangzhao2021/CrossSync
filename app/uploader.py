@@ -44,20 +44,26 @@ class UploadStore:
     def chunk_path(self, upload_id: str, idx: int) -> str:
         return os.path.join(self.session_dir(upload_id), f"{idx:08d}.part")
 
+    def payload_path(self, upload_id: str) -> str:
+        return os.path.join(self.session_dir(upload_id), "payload.bin")
+
     def list_sessions(self) -> List[str]:
         try:
             return [d for d in os.listdir(self.base_dir) if os.path.isdir(os.path.join(self.base_dir, d))]
         except FileNotFoundError:
             return []
 
-    def find_by_fingerprint(self, fingerprint: str) -> Optional[UploadMeta]:
+    def remove_session(self, upload_id: str) -> None:
+        shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
+
+    def find_by_fingerprint(self, fingerprint: str, target: Optional[str] = None) -> Optional[UploadMeta]:
         for sid in self.list_sessions():
             mp = self.meta_path(sid)
             try:
                 meta = UploadMeta.from_file(mp)
             except Exception:
                 continue
-            if meta.fingerprint == fingerprint:
+            if meta.fingerprint == fingerprint and (target is None or meta.target == target):
                 return meta
         return None
 
@@ -66,6 +72,9 @@ class UploadStore:
         os.makedirs(sd, exist_ok=True)
         with open(self.meta_path(meta.upload_id), "w", encoding="utf-8") as f:
             f.write(meta.to_json())
+        if settings.direct_upload_assembly:
+            with open(self.payload_path(meta.upload_id), "wb") as f:
+                f.truncate(meta.size)
 
     def update_meta(self, meta: UploadMeta) -> None:
         with open(self.meta_path(meta.upload_id), "w", encoding="utf-8") as f:
@@ -81,38 +90,124 @@ class UploadStore:
         if expected_size is not None and os.path.getsize(cp) != expected_size:
             raise HTTPException(status_code=400, detail="chunk size mismatch")
 
+    def chunk_temp_path(self, upload_id: str, idx: int) -> str:
+        return os.path.join(self.session_dir(upload_id), f"{idx:08d}.uploading")
+
+    def commit_streamed_chunk(self, upload_id: str, idx: int, temp_path: str, expected_size: Optional[int] = None, offset: int = 0, direct: bool = False):
+        sd = self.session_dir(upload_id)
+        if not os.path.isdir(sd):
+            raise HTTPException(status_code=404, detail="upload not found")
+        if expected_size is not None and os.path.getsize(temp_path) != expected_size:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail="chunk size mismatch")
+        if direct:
+            payload = self.payload_path(upload_id)
+            if not os.path.isfile(payload):
+                meta = self.get_meta(upload_id)
+                with open(payload, "wb") as f:
+                    f.truncate(meta.size)
+            with open(temp_path, "rb") as src, open(payload, "r+b") as out:
+                out.seek(offset)
+                shutil.copyfileobj(src, out, length=1024 * 1024)
+            with open(self.chunk_path(upload_id, idx), "wb") as marker:
+                marker.write(b"ok")
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
+            return
+        os.replace(temp_path, self.chunk_path(upload_id, idx))
+
     def get_meta(self, upload_id: str) -> UploadMeta:
         mp = self.meta_path(upload_id)
         if not os.path.isfile(mp):
             raise HTTPException(status_code=404, detail="upload not found")
         return UploadMeta.from_file(mp)
 
-    def assemble(self, upload_id: str) -> str:
+    def assemble(self, upload_id: str, compute_sha256: bool = True) -> str:
         meta = self.get_meta(upload_id)
         target_dir = settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir
         os.makedirs(target_dir, exist_ok=True)
         rel = sanitize_rel_path(meta.name)
         final_path = unique_path_nested(target_dir, rel)
+        chunk_paths = []
+        for idx in range(meta.total_chunks):
+            cp = self.chunk_path(upload_id, idx)
+            if not os.path.isfile(cp):
+                raise HTTPException(status_code=400, detail=f"missing chunk {idx}")
+            chunk_paths.append(cp)
 
         import hashlib
-        sha256 = hashlib.sha256()
-        # Append chunks in order and compute hash
-        with open(final_path, "wb") as out:
-            for idx in range(meta.total_chunks):
-                cp = self.chunk_path(upload_id, idx)
-                if not os.path.isfile(cp):
-                    raise HTTPException(status_code=400, detail=f"missing chunk {idx}")
-                with open(cp, "rb") as cf:
+        sha = None
+        payload_path = self.payload_path(upload_id)
+        if settings.direct_upload_assembly and os.path.isfile(payload_path):
+            if os.path.getsize(payload_path) != meta.size:
+                raise HTTPException(status_code=400, detail="assembled payload size mismatch")
+            if compute_sha256:
+                sha256 = hashlib.sha256()
+                with open(payload_path, "rb") as f:
                     while True:
-                        buf = cf.read(1024 * 1024)
+                        buf = f.read(1024 * 1024)
                         if not buf:
                             break
                         sha256.update(buf)
-                        out.write(buf)
+                sha = sha256.hexdigest()
+            temp_path = f"{final_path}.assembling-{upload_id}.tmp"
+            try:
+                try:
+                    os.replace(payload_path, final_path)
+                except OSError:
+                    with open(payload_path, "rb") as src, open(temp_path, "wb") as out:
+                        shutil.copyfileobj(src, out, length=1024 * 1024)
+                    os.replace(temp_path, final_path)
+                    try:
+                        os.remove(payload_path)
+                    except FileNotFoundError:
+                        pass
+            except Exception:
+                try:
+                    os.remove(temp_path)
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    pass
+                raise
+            shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
+            return final_path + (f"|sha256:{sha}" if sha else "")
+
+        sha256 = hashlib.sha256() if compute_sha256 else None
+        temp_path = f"{final_path}.assembling-{upload_id}.tmp"
+        try:
+            # Assemble into a temp file first so an interrupted or invalid upload
+            # never exposes a partial final file in the transfer list.
+            with open(temp_path, "wb") as out:
+                for cp in chunk_paths:
+                    with open(cp, "rb") as cf:
+                        while True:
+                            buf = cf.read(1024 * 1024)
+                            if not buf:
+                                break
+                            if sha256:
+                                sha256.update(buf)
+                            out.write(buf)
+            os.replace(temp_path, final_path)
+            if sha256:
+                sha = sha256.hexdigest()
+        except Exception:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+            raise
 
         # Cleanup session
         shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
-        return final_path + "|sha256:" + sha256.hexdigest()
+        return final_path + (f"|sha256:{sha}" if sha else "")
 
     def missing_chunks(self, upload_id: str) -> List[int]:
         meta = self.get_meta(upload_id)
