@@ -4,6 +4,7 @@ const THEME_KEY = 'crosssync_theme';
 const OPEN_KEY = 'crosssync_open_on_finish';
 const DATE_SUBDIR_KEY = 'crosssync_date_subdir';
 const VERIFY_KEY = 'crosssync_verify_chunks';
+const CLIENT_ID_KEY = 'crosssync_client_id';
 const MOBILE_CHUNK_SIZE = 16 * 1024 * 1024;
 const MOBILE_MAX_CONCURRENCY = 4;
 const DESKTOP_MAX_CONCURRENCY = 4;
@@ -105,6 +106,15 @@ function storeSet(key, value) {
   try {
     localStorage.setItem(key, value);
   } catch (_) {}
+}
+
+function browserClientId() {
+  let value = storeGet(CLIENT_ID_KEY);
+  if (!value) {
+    value = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    storeSet(CLIENT_ID_KEY, value);
+  }
+  return value;
 }
 
 function applyTheme(mode) {
@@ -1044,6 +1054,8 @@ async function startUpload(file, target) {
         size: file.size,
         chunk_size: uploadChunkSize(),
         last_modified: file.lastModified,
+        client_id: browserClientId(),
+        resume_key: `${file.name}:${file.size}:${file.lastModified}`,
         target,
       }),
     });
@@ -1474,7 +1486,7 @@ async function clearArea(area) {
   await fetchJson('/api/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ area }),
+    body: JSON.stringify({ area, clear: true }),
   });
   await refreshArea(area);
 }

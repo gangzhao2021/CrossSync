@@ -1,5 +1,5 @@
 import XCTest
-@testable import CrossSyncMobile
+@testable import CrossSync
 
 final class UploadMathTests: XCTestCase {
     func testLastChunkUsesRemainingBytes() {
@@ -19,4 +19,3 @@ final class UploadMathTests: XCTestCase {
         XCTAssertEqual(uploaded, chunk + 99)
     }
 }
-

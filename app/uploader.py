@@ -1,12 +1,24 @@
 import os
 import json
 import shutil
+import threading
+import unicodedata
+import uuid
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from fastapi import HTTPException
 
 from .config import settings
 from .utils import safe_join
+
+
+_path_reservation_lock = threading.Lock()
+_reserved_paths: set[str] = set()
+_windows_reserved_names = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 @dataclass
@@ -36,7 +48,13 @@ class UploadStore:
         os.makedirs(self.base_dir, exist_ok=True)
 
     def session_dir(self, upload_id: str) -> str:
-        return os.path.join(self.base_dir, upload_id)
+        try:
+            normalized = uuid.UUID(upload_id).hex
+        except (ValueError, AttributeError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid upload id")
+        if normalized != str(upload_id).lower():
+            raise HTTPException(status_code=400, detail="invalid upload id")
+        return safe_join(self.base_dir, normalized)
 
     def meta_path(self, upload_id: str) -> str:
         return os.path.join(self.session_dir(upload_id), "meta.json")
@@ -58,14 +76,23 @@ class UploadStore:
 
     def find_by_fingerprint(self, fingerprint: str, target: Optional[str] = None) -> Optional[UploadMeta]:
         for sid in self.list_sessions():
-            mp = self.meta_path(sid)
             try:
+                mp = self.meta_path(sid)
                 meta = UploadMeta.from_file(mp)
             except Exception:
                 continue
             if meta.fingerprint == fingerprint and (target is None or meta.target == target):
                 return meta
         return None
+
+    def reserved_bytes(self) -> int:
+        total = 0
+        for sid in self.list_sessions():
+            try:
+                total += max(0, self.get_meta(sid).size)
+            except Exception:
+                continue
+        return total
 
     def init_session(self, meta: UploadMeta) -> None:
         sd = self.session_dir(meta.upload_id)
@@ -131,14 +158,34 @@ class UploadStore:
         meta = self.get_meta(upload_id)
         target_dir = settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir
         os.makedirs(target_dir, exist_ok=True)
-        rel = sanitize_rel_path(meta.name)
-        final_path = unique_path_nested(target_dir, rel)
         chunk_paths = []
         for idx in range(meta.total_chunks):
             cp = self.chunk_path(upload_id, idx)
             if not os.path.isfile(cp):
                 raise HTTPException(status_code=400, detail=f"missing chunk {idx}")
             chunk_paths.append(cp)
+
+        final_path = reserve_unique_path_nested(target_dir, meta.name)
+        try:
+            return self._assemble_to_path(
+                upload_id,
+                meta,
+                chunk_paths,
+                final_path,
+                compute_sha256=compute_sha256,
+            )
+        finally:
+            release_reserved_path(final_path)
+
+    def _assemble_to_path(
+        self,
+        upload_id: str,
+        meta: UploadMeta,
+        chunk_paths: List[str],
+        final_path: str,
+        *,
+        compute_sha256: bool,
+    ) -> str:
 
         import hashlib
         sha = None
@@ -231,7 +278,10 @@ def unique_path(path: str) -> str:
 
 
 def unique_path_nested(base_dir: str, rel_path: str) -> str:
-    # Preserve directory structure under base_dir while unique-ifying the file name.
+    """Return an available path without reserving it.
+
+    Callers that will write later should use reserve_unique_path_nested instead.
+    """
     rel_path = sanitize_rel_path(rel_path)
     full = safe_join(base_dir, rel_path)
     parent = os.path.dirname(full)
@@ -248,19 +298,56 @@ def unique_path_nested(base_dir: str, rel_path: str) -> str:
         i += 1
 
 
+def reserve_unique_path_nested(base_dir: str, rel_path: str) -> str:
+    rel = sanitize_rel_path(rel_path)
+    base_real = os.path.realpath(os.path.abspath(base_dir))
+    full = safe_join(base_real, rel)
+    parent = os.path.dirname(full)
+    os.makedirs(parent, exist_ok=True)
+    name = os.path.basename(full)
+    stem, ext = os.path.splitext(name)
+
+    with _path_reservation_lock:
+        index = 0
+        while True:
+            candidate_name = name if index == 0 else f"{stem} ({index}){ext}"
+            candidate = safe_join(base_real, os.path.relpath(os.path.join(parent, candidate_name), base_real))
+            key = os.path.normcase(os.path.abspath(candidate))
+            if not os.path.exists(candidate) and key not in _reserved_paths:
+                _reserved_paths.add(key)
+                return candidate
+            index += 1
+
+
+def release_reserved_path(path: str) -> None:
+    key = os.path.normcase(os.path.abspath(path))
+    with _path_reservation_lock:
+        _reserved_paths.discard(key)
+
+
 def sanitize_rel_path(rel_path: str) -> str:
-    rel = rel_path.replace("\\", "/")
-    # remove leading slashes
-    while rel.startswith('/'):
-        rel = rel[1:]
-    # remove parent traversal
+    if not isinstance(rel_path, str):
+        raise ValueError("invalid file name")
+    rel = unicodedata.normalize("NFKC", rel_path).replace("\\", "/")
+    if len(rel) > 1024 or rel.startswith("/"):
+        raise ValueError("invalid file name")
+
     parts = []
     for p in rel.split('/'):
         if p in ('', '.'):
             continue
         if p == '..':
-            if parts:
-                parts.pop()
-            continue
+            raise ValueError("parent paths are not allowed")
+        if len(p) > 255 or p.endswith((" ", ".")):
+            raise ValueError("invalid file name")
+        if ':' in p or any(ord(ch) < 32 for ch in p):
+            raise ValueError("invalid file name")
+        if p.split('.', 1)[0].upper() in _windows_reserved_names:
+            raise ValueError("reserved Windows file name")
+        if p.lower() == ".crosssync":
+            raise ValueError("reserved CrossSync path")
         parts.append(p)
-    return '/'.join(parts)
+    normalized = '/'.join(parts)
+    if not normalized or normalized.lower().endswith(".sha256"):
+        raise ValueError("invalid file name")
+    return normalized

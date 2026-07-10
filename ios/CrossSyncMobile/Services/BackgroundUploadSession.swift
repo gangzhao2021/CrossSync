@@ -46,6 +46,7 @@ final class BackgroundUploadSession: NSObject, URLSessionDataDelegate, URLSessio
         try Task.checkCancellation()
         return try await withCheckedThrowingContinuation { continuation in
             let task = session.uploadTask(with: request, fromFile: fileURL)
+            task.taskDescription = fileURL.path
             let item = PendingUpload(continuation: continuation, progress: progress)
             lock.lock()
             pending[task.taskIdentifier] = item
@@ -57,6 +58,16 @@ final class BackgroundUploadSession: NSObject, URLSessionDataDelegate, URLSessio
     func cancelAll() {
         session.getAllTasks { tasks in
             tasks.forEach { $0.cancel() }
+        }
+    }
+
+    func cancelOrphanedTasks() {
+        session.getAllTasks { [weak self] tasks in
+            guard let self else { return }
+            self.lock.lock()
+            let activeTaskIDs = Set(self.pending.keys)
+            self.lock.unlock()
+            tasks.filter { !activeTaskIDs.contains($0.taskIdentifier) }.forEach { $0.cancel() }
         }
     }
 
@@ -79,6 +90,14 @@ final class BackgroundUploadSession: NSObject, URLSessionDataDelegate, URLSessio
         callback?(totalBytesSent, totalBytesExpectedToSend)
     }
 
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        CrossSyncServerTrust.handle(challenge: challenge, completionHandler: completionHandler)
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock()
         pending[dataTask.taskIdentifier]?.data.append(data)
@@ -90,7 +109,10 @@ final class BackgroundUploadSession: NSObject, URLSessionDataDelegate, URLSessio
         let item = pending.removeValue(forKey: task.taskIdentifier)
         lock.unlock()
 
-        guard let item else { return }
+        guard let item else {
+            removeChunkFileIfOwned(task.taskDescription)
+            return
+        }
         if let error {
             item.continuation.resume(throwing: error)
             return
@@ -109,5 +131,14 @@ final class BackgroundUploadSession: NSObject, URLSessionDataDelegate, URLSessio
         lock.unlock()
         DispatchQueue.main.async { completion?() }
     }
-}
 
+    private func removeChunkFileIfOwned(_ path: String?) {
+        guard let path else { return }
+        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CrossSyncChunks", isDirectory: true)
+            .standardizedFileURL.path
+        let candidate = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard candidate.hasPrefix(root + "/") else { return }
+        try? FileManager.default.removeItem(atPath: candidate)
+    }
+}

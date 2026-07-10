@@ -1,6 +1,7 @@
 import CoreTransferable
 import Foundation
 import PhotosUI
+import SwiftUI
 import UniformTypeIdentifiers
 
 private struct ImportedPhotoFile: Transferable, Sendable {
@@ -36,7 +37,7 @@ struct PhotoPreparationService {
         onProgress: @MainActor (_ completed: Int, _ total: Int, _ currentName: String) -> Void
     ) async throws -> [PreparedAsset] {
         guard !items.isEmpty else { return [] }
-        Self.resetWorkingDirectories()
+        Self.cleanupStaleWorkingFiles()
         await onProgress(0, items.count, "正在请求原片")
 
         var prepared = [PreparedAsset?](repeating: nil, count: items.count)
@@ -69,7 +70,7 @@ struct PhotoPreparationService {
                 }
             }
         } catch {
-            Self.resetWorkingDirectories()
+            Self.cleanup(prepared.compactMap { $0 })
             throw error
         }
 
@@ -103,14 +104,18 @@ struct PhotoPreparationService {
             preferredType: item.supportedContentTypes.first
         )
         let values = try finalURL.resourceValues(forKeys: [.fileSizeKey])
+        let fileSize = Int64(values.fileSize ?? 0)
+        let resumeKey = item.itemIdentifier.map { "photos:\($0)" }
+            ?? "file:\(uploadName):\(fileSize)"
         return PreparedAsset(
             id: UUID(),
             url: finalURL,
             name: uploadName,
-            size: Int64(values.fileSize ?? 0),
+            size: fileSize,
             // PhotosPicker may export a fresh temporary file each time. Zero keeps
             // the server fingerprint stable so selecting the same asset can resume.
             lastModifiedMilliseconds: 0,
+            resumeKey: resumeKey,
             kind: kind
         )
     }
@@ -177,14 +182,25 @@ struct PhotoPreparationService {
         return candidate
     }
 
-    private static func resetWorkingDirectories() {
+    private static func cleanupStaleWorkingFiles() {
         let directories = [
             FileManager.default.temporaryDirectory.appendingPathComponent("CrossSyncPicker", isDirectory: true),
             FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("CrossSyncPrepared", isDirectory: true)
         ]
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
         for directory in directories {
-            try? FileManager.default.removeItem(at: directory)
+            guard let files = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for file in files {
+                let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                if modified.map({ $0 < cutoff }) ?? false {
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
         }
     }
 }
