@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 import tempfile
 from dataclasses import dataclass
 from typing import Optional
@@ -22,8 +23,15 @@ class Settings:
     # Upload behavior
     default_chunk_size: int = 8 * 1024 * 1024  # 8 MB
     max_concurrency: int = 4
+    max_server_uploads: int = 8
     direct_upload_assembly: bool = True
     record_upload_checksums: bool = False
+    max_file_size: int = 100 * 1024 * 1024 * 1024  # 100 GB
+    min_chunk_size: int = 256 * 1024  # 256 KB
+    max_chunk_size: int = 64 * 1024 * 1024  # 64 MB
+    max_chunks_per_file: int = 10_000
+    max_active_uploads: int = 64
+    min_free_space_reserve: int = 256 * 1024 * 1024  # 256 MB
 
     # Cleanup
     temp_ttl_seconds: int = 60 * 60 * 48  # 48 hours
@@ -32,9 +40,8 @@ class Settings:
     open_on_finish_default: bool = False
     write_sha256_sidecar: bool = False
 
-    # OTP access control (optional)
-    otp_enabled: bool = False
-    otp_code: Optional[str] = None
+    # LAN access control. A persistent 12-digit token is generated on first run.
+    access_token: Optional[str] = None
 
 
 settings = Settings()
@@ -53,6 +60,14 @@ def _read_preferences() -> dict:
         return {}
 
 
+def _write_preferences(preferences: dict) -> None:
+    os.makedirs(settings.metadata_dir, exist_ok=True)
+    temp_path = f"{_preferences_path()}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(preferences, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, _preferences_path())
+
+
 def set_downloads_dir(path: str, *, persist: bool = True) -> str:
     folder = os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
     if not os.path.isdir(folder):
@@ -67,13 +82,9 @@ def set_downloads_dir(path: str, *, persist: bool = True) -> str:
 
     settings.downloads_dir = folder
     if persist:
-        os.makedirs(settings.metadata_dir, exist_ok=True)
         preferences = _read_preferences()
         preferences["downloads_dir"] = folder
-        temp_path = f"{_preferences_path()}.tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(preferences, f, ensure_ascii=False, indent=2)
-        os.replace(temp_path, _preferences_path())
+        _write_preferences(preferences)
     return folder
 
 
@@ -90,18 +101,24 @@ def _env_truthy(v: Optional[str]) -> bool:
 
 
 def load_env_overrides():
-    # Allow enabling OTP and setting code via env
-    settings.otp_enabled = _env_truthy(os.getenv("CROSSSYNC_ENABLE_OTP")) or settings.otp_enabled
-    code = os.getenv("CROSSSYNC_OTP_CODE")
-    if code:
-        settings.otp_code = code
+    configured_token = (os.getenv("CROSSSYNC_ACCESS_TOKEN") or os.getenv("CROSSSYNC_OTP_CODE") or "").strip()
+    preferences = _read_preferences()
+    saved_token = preferences.get("access_token")
+    if configured_token:
+        settings.access_token = configured_token
+    elif isinstance(saved_token, str) and len(saved_token) >= 8:
+        settings.access_token = saved_token
+    else:
+        settings.access_token = f"{secrets.randbelow(10**12):012d}"
+        preferences["access_token"] = settings.access_token
+        _write_preferences(preferences)
 
     # Override data directories
     dl = os.getenv("CROSSSYNC_DOWNLOADS_DIR")
     if dl:
         settings.downloads_dir = os.path.abspath(dl)
     else:
-        saved_downloads_dir = _read_preferences().get("downloads_dir")
+        saved_downloads_dir = preferences.get("downloads_dir")
         if isinstance(saved_downloads_dir, str) and os.path.isdir(saved_downloads_dir):
             settings.downloads_dir = os.path.abspath(saved_downloads_dir)
     ob = os.getenv("CROSSSYNC_OUTBOX_DIR")

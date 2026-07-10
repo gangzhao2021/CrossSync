@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import threading
 import time
 from typing import Dict, List, Optional
 
@@ -8,6 +9,7 @@ from .config import settings
 
 
 CHECKSUM_FILE = "checksums.json"
+_store_lock = threading.RLock()
 
 
 def normalize_rel_path(path: str) -> str:
@@ -61,6 +63,11 @@ def sha256_file(full_path: str) -> str:
     return h.hexdigest()
 
 
+def checksum_snapshot() -> Dict[str, dict]:
+    with _store_lock:
+        return dict(_read_store())
+
+
 def record_checksum(area: str, rel_path: str, full_path: str, sha256: str) -> dict:
     rel = normalize_rel_path(rel_path)
     stat = _file_stat(full_path)
@@ -73,24 +80,26 @@ def record_checksum(area: str, rel_path: str, full_path: str, sha256: str) -> di
         "saved_at": int(time.time()),
         "source": "manifest",
     }
-    data = _read_store()
-    data[_checksum_key(area, rel)] = record
-    _write_store(data)
+    with _store_lock:
+        data = _read_store()
+        data[_checksum_key(area, rel)] = record
+        _write_store(data)
     return record
 
 
 def delete_checksums(area: str, paths: Optional[List[str]] = None) -> None:
-    data = _read_store()
-    if not data:
-        return
+    with _store_lock:
+        data = _read_store()
+        if not data:
+            return
 
-    if paths is None:
-        prefix = f"{area}:"
-        data = {key: value for key, value in data.items() if not key.startswith(prefix)}
-    else:
-        for path in paths:
-            data.pop(_checksum_key(area, path), None)
-    _write_store(data)
+        if paths is None:
+            prefix = f"{area}:"
+            data = {key: value for key, value in data.items() if not key.startswith(prefix)}
+        else:
+            for path in paths:
+                data.pop(_checksum_key(area, path), None)
+        _write_store(data)
 
 
 def _legacy_sidecar_checksum(area: str, rel_path: str, full_path: str) -> Optional[dict]:
@@ -118,10 +127,15 @@ def _legacy_sidecar_checksum(area: str, rel_path: str, full_path: str) -> Option
     }
 
 
-def checksum_for_file(area: str, rel_path: str, full_path: str) -> Optional[dict]:
+def checksum_for_file(
+    area: str,
+    rel_path: str,
+    full_path: str,
+    records: Optional[Dict[str, dict]] = None,
+) -> Optional[dict]:
     rel = normalize_rel_path(rel_path)
     stat = _file_stat(full_path)
-    record = _read_store().get(_checksum_key(area, rel))
+    record = (records if records is not None else checksum_snapshot()).get(_checksum_key(area, rel))
     if isinstance(record, dict) and is_sha256(str(record.get("sha256", ""))):
         out = dict(record)
         out["source"] = out.get("source") or "manifest"

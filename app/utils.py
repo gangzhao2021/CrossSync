@@ -53,19 +53,29 @@ def get_lan_ip() -> str:
 
 
 def safe_join(base: str, *paths: str) -> str:
-    joined = os.path.abspath(os.path.join(base, *paths))
-    base_abs = os.path.abspath(base)
-    if os.path.commonpath([joined, base_abs]) != base_abs:
+    base_real = os.path.realpath(os.path.abspath(base))
+    joined = os.path.realpath(os.path.abspath(os.path.join(base_real, *paths)))
+    try:
+        contained = os.path.commonpath([joined, base_real]) == base_real
+    except ValueError:
+        contained = False
+    if not contained:
         raise ValueError("Path traversal detected")
     return joined
 
 
-def file_fingerprint(name: str, size: int, last_modified: Optional[int]) -> str:
+def file_fingerprint(
+    name: str,
+    size: int,
+    last_modified: Optional[int],
+    client_id: str = "",
+    resume_key: str = "",
+) -> str:
     m = hashlib.sha256()
-    m.update(name.encode("utf-8"))
-    m.update(str(size).encode("ascii"))
-    if last_modified is not None:
-        m.update(str(last_modified).encode("ascii"))
+    for value in (client_id, resume_key, name, str(size), str(last_modified or 0)):
+        encoded = value.encode("utf-8")
+        m.update(len(encoded).to_bytes(8, "big"))
+        m.update(encoded)
     return m.hexdigest()
 
 
@@ -114,16 +124,27 @@ def pick_folder(initial_path: Optional[str] = None) -> Optional[str]:
             raise RuntimeError("PowerShell is unavailable")
         script = r"""
 Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::EnableVisualStyles()
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$owner = New-Object System.Windows.Forms.Form
+$owner.StartPosition = 'CenterScreen'
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$owner.ShowInTaskbar = $false
+$owner.TopMost = $true
+$owner.Opacity = 0
+$owner.Show()
+$owner.Activate()
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
 $dialog.Description = '选择手机文件在电脑上的保存位置'
 $dialog.ShowNewFolderButton = $true
 if ($env:CROSSSYNC_PICKER_INITIAL -and (Test-Path -LiteralPath $env:CROSSSYNC_PICKER_INITIAL -PathType Container)) {
     $dialog.SelectedPath = $env:CROSSSYNC_PICKER_INITIAL
 }
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
     [Console]::Write($dialog.SelectedPath)
 }
+$owner.Close()
+$owner.Dispose()
 """
         env = os.environ.copy()
         env["CROSSSYNC_PICKER_INITIAL"] = initial
@@ -137,6 +158,9 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             creationflags=creationflags,
             check=False,
         )
+        if completed.returncode != 0:
+            message = (completed.stderr or completed.stdout or "PowerShell folder picker failed").strip()
+            raise RuntimeError(message)
         selected = completed.stdout.strip()
     elif sys.platform == "darwin":
         osascript = shutil.which("osascript")

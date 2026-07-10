@@ -5,6 +5,7 @@ param(
   [switch]$RegenerateCertificate,
   [switch]$EnableOtp,
   [string]$OtpCode,
+  [string]$AccessToken,
   [string]$LanHost
 )
 
@@ -31,9 +32,12 @@ if (!(Test-Path $venvPython)) { Write-Error 'Virtual env python not found. Venv 
 & $venvPip install -r requirements.txt
 
 # Prepare environment for OTP
-if ($EnableOtp) { $env:CROSSSYNC_ENABLE_OTP = '1' }
-if ($OtpCode) { $env:CROSSSYNC_OTP_CODE = $OtpCode }
+if ($AccessToken) { $env:CROSSSYNC_ACCESS_TOKEN = $AccessToken }
+elseif ($OtpCode) { $env:CROSSSYNC_ACCESS_TOKEN = $OtpCode }
 if ($LanHost) { $env:CROSSSYNC_LAN_HOST = $LanHost }
+
+$crossSyncToken = (& $venvPython -c "from app.config import settings, load_env_overrides; load_env_overrides(); print(settings.access_token)").Trim()
+Write-Host "CrossSync native app access token: $crossSyncToken" -ForegroundColor Cyan
 
 # HTTPS is the default because iPhone Screen Wake Lock and PWA installation
 # require a secure context. Use -Http only as an explicit compatibility mode.

@@ -2,7 +2,7 @@
 
 > 原生 iPhone 客户端位于 [`ios/`](ios/README.md)，用于在系统照片选择器关闭后显示 iCloud 原片准备进度、保持前台常亮，并复用 16 MB / 4 路分片上传。
 
-CrossSync is a local LAN file-transfer app for moving files directly between iPhone Safari and a Windows or macOS computer.
+CrossSync is a local LAN file-transfer app for moving files directly between iPhone Safari and a Windows or macOS computer. A persistent access token is enabled by default so other devices on the LAN cannot browse, upload, or delete files.
 
 ## What It Does
 
@@ -23,6 +23,8 @@ CrossSync is a local LAN file-transfer app for moving files directly between iPh
 ```
 
 Windows starts in HTTPS mode by default so iPhone Screen Wake Lock and Home Screen installation can work. Then open `https://localhost:8008` on the computer and scan the QR code with iPhone.
+
+The first run also generates a persistent 12-digit access token in `data/.crosssync/preferences.json`. It is printed in the terminal and shown on the computer-only QR page. Safari receives it through the QR link automatically; enter the same token in the native iPhone app's connection settings.
 
 The first HTTPS run creates a private `CrossSync Local CA` and a server certificate under `certs/`. On iPhone, open `/ca.crt`, install the profile, then go to **Settings → General → About → Certificate Trust Settings** and enable full trust for `CrossSync Local CA`. Reopen CrossSync afterward.
 
@@ -50,8 +52,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 
 ## Options
 
-- Windows OTP gate: `.\run.ps1 -EnableOtp` or `.\run.ps1 -EnableOtp -OtpCode 123456`
-- macOS/Linux OTP gate: `./run.sh --otp` or `./run.sh --otp-code 123456`
+- Custom access token: `.\run.ps1 -AccessToken 123456789012` or `./run.sh --access-token 123456789012`
 - Windows HTTPS: enabled by default (`.\run.ps1` or `.\run.ps1 -Https`)
 - Windows HTTP compatibility mode: `.\run.ps1 -Http`
 - Regenerate Windows certificates after a network/address change: `.\run.ps1 -RegenerateCertificate`
@@ -67,6 +68,7 @@ On Windows, CrossSync generates `certs/cert.pem`, `certs/key.pem`, and `certs/ca
 - computer -> iPhone: `data/outbox`
 - chunk temp files: `data/temp`
 - checksum metadata: `data/.crosssync/checksums.json`
+- access token and preferences: `data/.crosssync/preferences.json`
 
 On the computer, open the CrossSync workbench and use **选择保存位置** in **电脑接收区** to choose any writable folder. The choice is saved in `data/.crosssync/preferences.json` and reused the next time CrossSync starts. `CROSSSYNC_DOWNLOADS_DIR` still takes priority when it is explicitly set.
 

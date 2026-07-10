@@ -19,7 +19,16 @@ final class TransferViewModel: ObservableObject {
     @Published private(set) var errorMessage = ""
 
     @Published var baseURLString: String {
-        didSet { UserDefaults.standard.set(baseURLString, forKey: Self.serverURLKey) }
+        didSet {
+            UserDefaults.standard.set(baseURLString, forKey: Self.serverURLKey)
+            if baseURLString != oldValue { invalidateConnection() }
+        }
+    }
+    @Published var accessToken: String {
+        didSet {
+            UserDefaults.standard.set(accessToken, forKey: Self.accessTokenKey)
+            if accessToken != oldValue { invalidateConnection() }
+        }
     }
     @Published var keepScreenAwake: Bool {
         didSet {
@@ -34,12 +43,23 @@ final class TransferViewModel: ObservableObject {
 
     private static let serverURLKey = "CrossSyncServerURL"
     private static let keepAwakeKey = "CrossSyncKeepAwake"
+    private static let accessTokenKey = "CrossSyncAccessToken"
+    private static let clientIDKey = "CrossSyncClientID"
     private var transferTask: Task<Void, Never>?
     private var uploadService: ChunkedUploadService?
+    private let clientID: String
 
     init() {
         baseURLString = UserDefaults.standard.string(forKey: Self.serverURLKey)
             ?? "https://192.168.2.14:8008"
+        accessToken = UserDefaults.standard.string(forKey: Self.accessTokenKey) ?? ""
+        if let savedClientID = UserDefaults.standard.string(forKey: Self.clientIDKey) {
+            clientID = savedClientID
+        } else {
+            let generated = UUID().uuidString.lowercased()
+            UserDefaults.standard.set(generated, forKey: Self.clientIDKey)
+            clientID = generated
+        }
         if UserDefaults.standard.object(forKey: Self.keepAwakeKey) == nil {
             keepScreenAwake = true
         } else {
@@ -53,8 +73,13 @@ final class TransferViewModel: ObservableObject {
             connectionError = CrossSyncAPIError.invalidServerURL.localizedDescription
             return
         }
+        guard !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            serverConfig = nil
+            connectionError = "请输入电脑端显示的 12 位访问令牌。"
+            return
+        }
         do {
-            serverConfig = try await CrossSyncAPI(baseURL: url).fetchConfig()
+            serverConfig = try await makeAPI(baseURL: url).fetchConfig()
             connectionError = nil
         } catch {
             serverConfig = nil
@@ -112,59 +137,90 @@ final class TransferViewModel: ObservableObject {
         }
 
         do {
-            let api = CrossSyncAPI(baseURL: url)
+            let api = makeAPI(baseURL: url)
             if serverConfig == nil {
                 serverConfig = try await api.fetchConfig()
             }
 
-            prepared = try await PhotoPreparationService().prepare(items: items) { [weak self] completed, total, name in
-                self?.preparationCompleted = completed
-                self?.preparationTotal = total
-                self?.currentFileName = name
-            }
-            try Task.checkCancellation()
-
-            phase = .uploading
             let service = ChunkedUploadService(api: api)
             uploadService = service
             var lastReceipt: UploadReceipt?
+            var photoCount = 0
+            var videoCount = 0
+            var failedNames: [String] = []
+            let batchSize = 4
 
-            for (index, asset) in prepared.enumerated() {
+            for batchStart in stride(from: 0, to: items.count, by: batchSize) {
                 try Task.checkCancellation()
-                uploadedItems = index
-                currentFileName = asset.name
-                currentFileProgress = 0
-                speedBytesPerSecond = 0
-                let startedAt = Date()
+                let batchEnd = min(batchStart + batchSize, items.count)
+                let batch = Array(items[batchStart..<batchEnd])
+                phase = .preparing
+                prepared = try await PhotoPreparationService().prepare(items: batch) { [weak self] completed, _, name in
+                    self?.preparationCompleted = batchStart + completed
+                    self?.preparationTotal = items.count
+                    self?.currentFileName = name
+                }
+                try Task.checkCancellation()
+                phase = .uploading
 
-                lastReceipt = try await service.upload(asset: asset) { [weak self] sent, total in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        self.currentFileProgress = total > 0 ? Double(sent) / Double(total) : 0
-                        let elapsed = max(Date().timeIntervalSince(startedAt), 0.1)
-                        self.speedBytesPerSecond = Double(sent) / elapsed
+                for asset in prepared {
+                    try Task.checkCancellation()
+                    currentFileName = asset.name
+                    currentFileProgress = 0
+                    speedBytesPerSecond = 0
+                    let startedAt = Date()
+
+                    do {
+                        lastReceipt = try await service.upload(asset: asset) { [weak self] sent, total in
+                            Task { @MainActor [weak self] in
+                                guard let self else { return }
+                                self.currentFileProgress = total > 0 ? Double(sent) / Double(total) : 0
+                                let elapsed = max(Date().timeIntervalSince(startedAt), 0.1)
+                                self.speedBytesPerSecond = Double(sent) / elapsed
+                            }
+                        }
+                        uploadedItems += 1
+                        currentFileProgress = 1
+                        if asset.kind == .photo { photoCount += 1 }
+                        if asset.kind == .video { videoCount += 1 }
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch let error as URLError where error.code == .cancelled {
+                        throw error
+                    } catch {
+                        failedNames.append(asset.name)
                     }
                 }
-                uploadedItems = index + 1
-                currentFileProgress = 1
+                PhotoPreparationService.cleanup(prepared)
+                prepared = []
             }
 
-            let photoCount = prepared.filter { $0.kind == .photo }.count
-            let videoCount = prepared.filter { $0.kind == .video }.count
             summary = TransferSummary(
-                total: prepared.count,
+                total: uploadedItems + failedNames.count,
                 photos: photoCount,
                 videos: videoCount,
-                failed: 0,
+                failed: failedNames.count,
                 destination: serverConfig?.downloadsDirectory ?? lastReceipt?.savedPath ?? "电脑接收区"
             )
-            phase = .complete
+            if failedNames.isEmpty {
+                phase = .complete
+            } else {
+                let names = failedNames.prefix(5).joined(separator: "、")
+                let more = failedNames.count > 5 ? " 等 \(failedNames.count) 项" : ""
+                errorMessage = "已成功传输 \(uploadedItems) / \(totalItems) 项。失败：\(names)\(more)。请只重新选择这些项目。"
+                phase = .failed
+            }
         } catch is CancellationError {
             phase = .ready
         } catch let error as URLError where error.code == .cancelled {
             phase = .ready
         } catch {
-            fail(error)
+            if uploadedItems > 0 {
+                errorMessage = "已成功传输 \(uploadedItems) / \(totalItems) 项。\(error.localizedDescription)"
+                phase = .failed
+            } else {
+                fail(error)
+            }
         }
     }
 
@@ -174,7 +230,7 @@ final class TransferViewModel: ObservableObject {
         guard
             let url = URL(string: value),
             let scheme = url.scheme?.lowercased(),
-            (scheme == "https" || scheme == "http"),
+            scheme == "https",
             url.host != nil
         else { return nil }
         return url
@@ -183,6 +239,19 @@ final class TransferViewModel: ObservableObject {
     private func fail(_ error: Error) {
         errorMessage = error.localizedDescription
         phase = .failed
+    }
+
+    private func invalidateConnection() {
+        serverConfig = nil
+        connectionError = nil
+    }
+
+    private func makeAPI(baseURL: URL) -> CrossSyncAPI {
+        CrossSyncAPI(
+            baseURL: baseURL,
+            accessToken: accessToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            clientID: clientID
+        )
     }
 
     private func resetProgress() {
@@ -199,4 +268,3 @@ final class TransferViewModel: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = keepScreenAwake && phase.isBusy
     }
 }
-

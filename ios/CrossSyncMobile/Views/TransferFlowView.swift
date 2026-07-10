@@ -87,7 +87,7 @@ private struct ReadyView: View {
             PhotosPicker(
                 selection: $selection,
                 maxSelectionCount: 200,
-                selectionBehavior: .ordered,
+                selectionBehavior: .continuousAndOrdered,
                 matching: .any(of: [.images, .videos]),
                 preferredItemEncoding: .current,
                 photoLibrary: PHPhotoLibrary.shared()
@@ -283,7 +283,7 @@ private struct CompleteView: View {
             PhotosPicker(
                 selection: $selection,
                 maxSelectionCount: 200,
-                selectionBehavior: .ordered,
+                selectionBehavior: .continuousAndOrdered,
                 matching: .any(of: [.images, .videos]),
                 preferredItemEncoding: .current,
                 photoLibrary: PHPhotoLibrary.shared()
@@ -351,6 +351,14 @@ private struct ServerSettingsView: View {
                     Button("测试连接") {
                         Task { await model.refreshConnection() }
                     }
+                }
+                Section("访问令牌") {
+                    SecureField("电脑端显示的 12 位令牌", text: $model.accessToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.asciiCapable)
+                    Text("令牌显示在电脑端 CrossSync 的扫码首页。")
+                        .font(.footnote)
                 }
                 Section("状态") {
                     LabeledContent("连接", value: model.isConnected ? "已连接" : "未连接")

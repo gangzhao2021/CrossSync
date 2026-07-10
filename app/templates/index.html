@@ -29,9 +29,7 @@
           <h2>扫码连接</h2>
           <p>电脑与 iPhone 需要在同一个局域网内。</p>
           <code>{{ lan_url }}</code>
-          {% if otp_enabled %}
-          <p class="otp">访问码：<strong>{{ otp }}</strong></p>
-          {% endif %}
+          <p class="otp">原生 App 访问令牌：<strong>{{ access_token }}</strong></p>
           <a class="btn primary" href="{{ lan_url }}">打开工作台</a>
           {% if ca_available and is_https %}
           <div class="certificate-setup">

@@ -6,11 +6,12 @@ import asyncio
 import shutil
 import ipaddress
 import socket
+import secrets
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI, Request, UploadFile, File, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi import Body
-from fastapi.responses import HTMLResponse, FileResponse, ORJSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, ORJSONResponse, RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
 import tempfile
 import zipfile
@@ -27,9 +28,16 @@ from .utils import (
     pick_folder,
     safe_join,
 )
-from .uploader import UploadStore, UploadMeta, sanitize_rel_path, unique_path_nested
+from .uploader import (
+    UploadStore,
+    UploadMeta,
+    release_reserved_path,
+    reserve_unique_path_nested,
+    sanitize_rel_path,
+)
 from .checksums import (
     checksum_for_file,
+    checksum_snapshot,
     delete_checksums,
     normalize_rel_path,
     record_checksum,
@@ -47,43 +55,58 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "t
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 upload_store = UploadStore(os.path.join(settings.temp_dir, "uploads"))
+upload_slots = asyncio.Semaphore(settings.max_server_uploads)
 
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#247c6d"/><path fill="#fffefa" d="M18 19h12v6h-6v14h6v6H18V19Zm16 0h12v6h-8v5h7v6h-7v9h-6V19Z"/></svg>"""
 
 
 def app_url_for_request(request: Request, sid: Optional[str] = None):
     host_ip = get_lan_ip()
-    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
-    scheme = forwarded_proto or request.url.scheme or "http"
+    scheme = request.url.scheme or "http"
     port = request.url.port or settings.port
     params = {}
-    if settings.otp_enabled:
-        if not settings.otp_code:
-            settings.otp_code = str(int(time.time()))[-6:]
-        params["k"] = settings.otp_code
+    if settings.access_token:
+        params["k"] = settings.access_token
     if sid:
         params["sid"] = sid
     query = f"?{urlencode(params)}" if params else ""
     return host_ip, f"{scheme}://{host_ip}:{port}/app{query}"
 
 
-# Optional simple OTP gate middleware
 @app.middleware("http")
-async def otp_gate(request: Request, call_next):
-    if not settings.otp_enabled:
-        return await call_next(request)
+async def access_gate(request: Request, call_next):
     path = request.scope.get("path", "")
-    # Public endpoints
-    if path in {"/", "/qr.png", "/favicon.ico", "/manifest.webmanifest", "/sw.js", "/ca.crt"} or path.startswith("/static") or path.startswith("/api/sse/") or path.startswith("/api/scanned"):
+    public = (
+        path in {"/favicon.ico", "/manifest.webmanifest", "/sw.js", "/ca.crt", "/healthz"}
+        or path.startswith("/static/")
+    )
+    if public or is_host_request(request):
         return await call_next(request)
-    # Validate cookie or query param
-    token = request.cookies.get("x_otp") or request.query_params.get("k")
-    if token and settings.otp_code and token == settings.otp_code:
-        response = await call_next(request)
-        # Set cookie for subsequent API calls
-        response.set_cookie("x_otp", token, httponly=False, samesite="lax")
+
+    authorization = request.headers.get("authorization", "")
+    bearer = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+    query_token = request.query_params.get("k", "")
+    token = bearer or request.headers.get("x-crosssync-token", "") or request.cookies.get("crosssync_access", "") or query_token
+    if token and settings.access_token and secrets.compare_digest(token, settings.access_token):
+        if query_token and request.method == "GET" and path == "/app":
+            clean_query = urlencode([(key, value) for key, value in request.query_params.multi_items() if key != "k"])
+            response = RedirectResponse(str(request.url.replace(query=clean_query)), status_code=303)
+        else:
+            response = await call_next(request)
+        response.set_cookie(
+            "crosssync_access",
+            settings.access_token,
+            httponly=True,
+            secure=request.url.scheme == "https",
+            samesite="strict",
+            max_age=60 * 60 * 24 * 180,
+        )
         return response
-    return HTMLResponse("<h3>需要一次性访问码</h3><p>请返回二维码页或附加 ?k=CODE 参数。</p>", status_code=401)
+
+    await asyncio.sleep(0.15)
+    if path.startswith("/api/") or path.startswith("/dl/"):
+        return ORJSONResponse({"detail": "需要 CrossSync 访问令牌"}, status_code=401)
+    return HTMLResponse("<h3>需要 CrossSync 访问令牌</h3><p>请从电脑端二维码重新打开。</p>", status_code=401)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -95,8 +118,7 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {
         "request": request,
         "lan_url": url,
-        "otp": settings.otp_code,
-        "otp_enabled": settings.otp_enabled,
+        "access_token": settings.access_token,
         "sid": sid,
         "ca_available": ca_available,
         "is_https": request.url.scheme == "https",
@@ -245,18 +267,29 @@ class InitUploadBody:
 @app.post("/api/init-upload")
 async def init_upload(payload: dict = Body(...)):
     try:
-        name = payload["name"]  # can be nested path under target root
+        name = sanitize_rel_path(payload["name"])
         size = int(payload["size"])
-        chunk_size = int(payload.get("chunk_size") or settings.default_chunk_size)
+        raw_chunk_size = payload.get("chunk_size")
+        chunk_size = int(settings.default_chunk_size if raw_chunk_size is None else raw_chunk_size)
         last_modified = payload.get("last_modified")
         target = payload.get("target", "downloads")
+        client_id = str(payload.get("client_id") or "")
+        resume_key = str(payload.get("resume_key") or "")
         if target not in ("downloads", "outbox"):
             raise ValueError("invalid target")
-    except Exception:
+        if size < 0 or size > settings.max_file_size:
+            raise ValueError("invalid size")
+        if not settings.min_chunk_size <= chunk_size <= settings.max_chunk_size:
+            raise ValueError("invalid chunk size")
+        if len(client_id) > 128 or len(resume_key) > 512:
+            raise ValueError("invalid resume identity")
+    except (KeyError, TypeError, ValueError):
         raise HTTPException(status_code=400, detail="invalid payload")
 
     total_chunks = (size + chunk_size - 1) // chunk_size
-    fingerprint = file_fingerprint(name, size, last_modified)
+    if total_chunks > settings.max_chunks_per_file:
+        raise HTTPException(status_code=413, detail="too many chunks")
+    fingerprint = file_fingerprint(name, size, last_modified, client_id, resume_key)
     # Try find existing unfinished session
     existing = upload_store.find_by_fingerprint(fingerprint, target=target)
     if existing:
@@ -273,6 +306,17 @@ async def init_upload(payload: dict = Body(...)):
                 "missing": missing,
             })
         upload_store.remove_session(existing.upload_id)
+
+    if len(upload_store.list_sessions()) >= settings.max_active_uploads:
+        raise HTTPException(status_code=503, detail="too many active uploads")
+    target_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
+    try:
+        free = shutil.disk_usage(target_dir).free
+    except OSError:
+        free = None
+    reserved = upload_store.reserved_bytes()
+    if free is not None and size + reserved + settings.min_free_space_reserve > free:
+        raise HTTPException(status_code=507, detail="not enough free disk space")
 
     upload_id = uuid.uuid4().hex
     meta = UploadMeta(
@@ -295,8 +339,17 @@ async def init_upload(payload: dict = Body(...)):
     })
 
 
-@app.put("/api/upload/{upload_id}/{chunk_index}")
 async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
+    async with upload_slots:
+        return await _upload_chunk(upload_id, chunk_index, request)
+
+
+@app.put("/api/upload/{upload_id}/{chunk_index}")
+async def upload_chunk_route(upload_id: str, chunk_index: int, request: Request):
+    return await upload_chunk(upload_id, chunk_index, request)
+
+
+async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
     meta = upload_store.get_meta(upload_id)
     if chunk_index < 0 or chunk_index >= meta.total_chunks:
         raise HTTPException(status_code=400, detail="chunk index out of range")
@@ -320,11 +373,17 @@ async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
                 if not block:
                     continue
                 total += len(block)
-                if total > expected and chunk_index != meta.total_chunks - 1:
+                if total > expected:
                     raise HTTPException(status_code=400, detail=f"chunk too large {total} > {expected}")
                 if sha256:
                     sha256.update(block)
                 f.write(block)
+    except asyncio.CancelledError:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        raise
     except HTTPException:
         try:
             os.remove(temp_path)
@@ -346,13 +405,11 @@ async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
         raise HTTPException(status_code=400, detail="chunk checksum mismatch")
 
     if total != expected:
-        # iOS/Safari may split differently if size unknown; accept but mark warning
-        if not (chunk_index == meta.total_chunks - 1 and total <= expected and total > 0):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
-            raise HTTPException(status_code=400, detail=f"chunk size mismatch {total} != {expected}")
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"chunk size mismatch {total} != {expected}")
 
     upload_store.commit_streamed_chunk(
         upload_id,
@@ -361,8 +418,6 @@ async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
         offset=meta.chunk_size * chunk_index,
         direct=settings.direct_upload_assembly,
     )
-    meta.received[str(chunk_index)] = total
-    upload_store.update_meta(meta)
     return ORJSONResponse({"ok": True, "idx": chunk_index})
 
 
@@ -372,16 +427,27 @@ async def upload_status(upload_id: str):
     return ORJSONResponse({"missing": missing})
 
 
-@app.post("/api/upload-stream")
 async def upload_stream(request: Request):
+    async with upload_slots:
+        return await _upload_stream(request)
+
+
+@app.post("/api/upload-stream")
+async def upload_stream_route(request: Request):
+    return await upload_stream(request)
+
+
+async def _upload_stream(request: Request):
     name = request.query_params.get("name") or request.headers.get("x-file-name")
     target = request.query_params.get("target", "downloads")
     if not name or target not in ("downloads", "outbox"):
         raise HTTPException(status_code=400, detail="invalid stream upload request")
     try:
-        expected_size = int(request.query_params.get("size") or request.headers.get("x-file-size") or "-1")
+        expected_size = int(request.query_params.get("size") or request.headers.get("x-file-size") or "")
     except ValueError:
-        expected_size = -1
+        raise HTTPException(status_code=400, detail="valid file size is required")
+    if expected_size < 0 or expected_size > settings.max_file_size:
+        raise HTTPException(status_code=413, detail="file is too large")
 
     checksum_flag = request.query_params.get("checksum")
     compute_checksum = settings.record_upload_checksums
@@ -389,8 +455,17 @@ async def upload_stream(request: Request):
         compute_checksum = checksum_flag not in {"0", "false", "False", "no", "off"}
 
     target_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
-    rel = sanitize_rel_path(name)
-    final_path = unique_path_nested(target_dir, rel)
+    try:
+        free = shutil.disk_usage(target_dir).free
+    except OSError:
+        free = None
+    if free is not None and expected_size + settings.min_free_space_reserve > free:
+        raise HTTPException(status_code=507, detail="not enough free disk space")
+    try:
+        rel = sanitize_rel_path(name)
+        final_path = reserve_unique_path_nested(target_dir, rel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     stream_dir = os.path.join(settings.temp_dir, "streams")
     os.makedirs(stream_dir, exist_ok=True)
     temp_path = os.path.join(stream_dir, f"{uuid.uuid4().hex}.uploading")
@@ -426,12 +501,21 @@ async def upload_stream(request: Request):
                 os.remove(temp_path)
             except FileNotFoundError:
                 pass
+    except asyncio.CancelledError:
+        for path in (temp_path, final_temp_path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        release_reserved_path(final_path)
+        raise
     except HTTPException:
         for path in (temp_path, final_temp_path):
             try:
                 os.remove(path)
             except Exception:
                 pass
+        release_reserved_path(final_path)
         raise
     except Exception as exc:
         for path in (temp_path, final_temp_path):
@@ -439,6 +523,7 @@ async def upload_stream(request: Request):
                 os.remove(path)
             except Exception:
                 pass
+        release_reserved_path(final_path)
         raise HTTPException(status_code=499, detail=f"stream upload interrupted: {exc}")
 
     base_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
@@ -452,12 +537,13 @@ async def upload_stream(request: Request):
             checksum_info = None
 
     open_flag = request.query_params.get("open")
-    if open_flag and open_flag not in ("0", "false", "False"):
+    if open_flag and open_flag not in ("0", "false", "False") and is_host_request(request):
         try:
             open_folder(os.path.dirname(final_path))
         except Exception:
             pass
 
+    release_reserved_path(final_path)
     return ORJSONResponse({
         "saved": final_path,
         "path": rel_path,
@@ -476,7 +562,8 @@ async def finish_upload(upload_id: str, request: Request):
     compute_checksum = settings.record_upload_checksums
     if checksum_flag is not None:
         compute_checksum = checksum_flag not in {"0", "false", "False", "no", "off"}
-    result = upload_store.assemble(upload_id, compute_sha256=compute_checksum)
+    async with upload_slots:
+        result = await asyncio.to_thread(upload_store.assemble, upload_id, compute_sha256=compute_checksum)
     if "|sha256:" in result:
         final_path, sha = result.split("|sha256:", 1)
     else:
@@ -491,7 +578,7 @@ async def finish_upload(upload_id: str, request: Request):
             checksum_info = None
     # Optionally open folder on Windows host
     open_flag = request.query_params.get("open")
-    if open_flag and open_flag not in ("0", "false", "False"):
+    if open_flag and open_flag not in ("0", "false", "False") and is_host_request(request):
         try:
             open_folder(os.path.dirname(final_path))
         except Exception:
@@ -525,10 +612,13 @@ def is_hidden_transfer_file(rel_path: str) -> bool:
 
 
 def iter_files_within(base_dir: str, area: Optional[str] = None):
+    records = checksum_snapshot() if area else None
     for root, dirs, files in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d != ".crosssync"]
+        dirs[:] = [d for d in dirs if d != ".crosssync" and not os.path.islink(os.path.join(root, d))]
         for f in files:
             full = os.path.join(root, f)
+            if os.path.islink(full):
+                continue
             rel = os.path.relpath(full, base_dir)
             rel_norm = normalize_rel_path(rel)
             if is_hidden_transfer_file(rel_norm):
@@ -540,7 +630,7 @@ def iter_files_within(base_dir: str, area: Optional[str] = None):
                 "mtime": int(stat.st_mtime),
             }
             if area:
-                checksum = checksum_for_file(area, rel_norm, full)
+                checksum = checksum_for_file(area, rel_norm, full, records)
                 if checksum:
                     item["sha256"] = checksum["sha256"]
                     item["checksum_source"] = checksum.get("source")
@@ -548,14 +638,33 @@ def iter_files_within(base_dir: str, area: Optional[str] = None):
             yield item
 
 
+def create_zip_archive(files, prefix: str) -> str:
+    os.makedirs(settings.temp_dir, exist_ok=True)
+    fd, tmp_zip = tempfile.mkstemp(prefix=prefix, suffix=".zip", dir=settings.temp_dir)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            for full, arc in files:
+                zf.write(full, arc.replace("\\", "/"))
+        return tmp_zip
+    except Exception:
+        try:
+            os.remove(tmp_zip)
+        except OSError:
+            pass
+        raise
+
+
 @app.get("/api/list/downloads")
 async def list_downloads():
-    return ORJSONResponse({"files": list(iter_files_within(settings.downloads_dir, "downloads"))})
+    files = await asyncio.to_thread(lambda: list(iter_files_within(settings.downloads_dir, "downloads")))
+    return ORJSONResponse({"files": files})
 
 
 @app.get("/api/list/outbox")
 async def list_outbox():
-    return ORJSONResponse({"files": list(iter_files_within(settings.outbox_dir, "outbox"))})
+    files = await asyncio.to_thread(lambda: list(iter_files_within(settings.outbox_dir, "outbox")))
+    return ORJSONResponse({"files": files})
 
 
 @app.post("/api/verify")
@@ -573,16 +682,21 @@ async def api_verify(payload: dict = Body(...)):
         raise HTTPException(status_code=403, detail="bad path")
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="not found")
-    return ORJSONResponse(verify_checksum(area, normalize_rel_path(path), full))
+    result = await asyncio.to_thread(verify_checksum, area, normalize_rel_path(path), full)
+    return ORJSONResponse(result)
 
 
 @app.post("/api/open/downloads")
-async def open_downloads_folder():
+async def open_downloads_folder(request: Request):
+    if not is_host_request(request):
+        raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上打开目录")
     return ORJSONResponse({"ok": open_folder(settings.downloads_dir)})
 
 
 @app.post("/api/open/outbox")
-async def open_outbox_folder():
+async def open_outbox_folder(request: Request):
+    if not is_host_request(request):
+        raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上打开目录")
     return ORJSONResponse({"ok": open_folder(settings.outbox_dir)})
 
 
@@ -618,23 +732,14 @@ async def download_outbox_zip(request: Request):
             except ValueError:
                 continue
             if os.path.isfile(full):
-                files.append((full, p))
+                files.append((full, normalize_rel_path(os.path.relpath(full, settings.outbox_dir))))
     else:
-        for f in iter_files_within(settings.outbox_dir, "outbox"):
-            files.append((os.path.join(settings.outbox_dir, f["path"].replace("/", os.sep)), f["path"]))
+        listed = await asyncio.to_thread(lambda: list(iter_files_within(settings.outbox_dir, "outbox")))
+        files = [(os.path.join(settings.outbox_dir, f["path"].replace("/", os.sep)), f["path"]) for f in listed]
     if not files:
         raise HTTPException(status_code=404, detail="no files")
 
-    # Create a temp zip file then stream and delete after
-    tmp_dir = settings.temp_dir
-    os.makedirs(tmp_dir, exist_ok=True)
-    fd, tmp_zip = tempfile.mkstemp(prefix="outbox_", suffix=".zip", dir=tmp_dir)
-    os.close(fd)
-    with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        for full, arc in files:
-            # arc must be posix style
-            arcname = arc.replace("\\", "/")
-            zf.write(full, arcname)
+    tmp_zip = await asyncio.to_thread(create_zip_archive, files, "outbox_")
     filename = f"outbox-{int(time.time())}.zip"
     return FileResponse(tmp_zip, filename=filename, media_type="application/zip", background=BackgroundTask(lambda: os.remove(tmp_zip)))
 
@@ -665,20 +770,13 @@ async def download_downloads_zip(request: Request):
             except ValueError:
                 continue
             if os.path.isfile(full):
-                files.append((full, p))
+                files.append((full, normalize_rel_path(os.path.relpath(full, settings.downloads_dir))))
     else:
-        for f in iter_files_within(settings.downloads_dir, "downloads"):
-            files.append((os.path.join(settings.downloads_dir, f["path"].replace("/", os.sep)), f["path"]))
+        listed = await asyncio.to_thread(lambda: list(iter_files_within(settings.downloads_dir, "downloads")))
+        files = [(os.path.join(settings.downloads_dir, f["path"].replace("/", os.sep)), f["path"]) for f in listed]
     if not files:
         raise HTTPException(status_code=404, detail="no files")
-    tmp_dir = settings.temp_dir
-    os.makedirs(tmp_dir, exist_ok=True)
-    fd, tmp_zip = tempfile.mkstemp(prefix="downloads_", suffix=".zip", dir=tmp_dir)
-    os.close(fd)
-    with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        for full, arc in files:
-            arcname = arc.replace("\\", "/")
-            zf.write(full, arcname)
+    tmp_zip = await asyncio.to_thread(create_zip_archive, files, "downloads_")
     filename = f"downloads-{int(time.time())}.zip"
     return FileResponse(tmp_zip, filename=filename, media_type="application/zip", background=BackgroundTask(lambda: os.remove(tmp_zip)))
 
@@ -686,9 +784,12 @@ async def download_downloads_zip(request: Request):
 @app.post("/api/delete")
 async def api_delete(payload: dict = Body(...)):
     area = payload.get("area")
-    paths = payload.get("paths") or []
+    paths = payload.get("paths")
+    clear = payload.get("clear") is True
     if area not in ("downloads", "outbox"):
         raise HTTPException(status_code=400, detail="invalid area")
+    if not clear and not isinstance(paths, list):
+        raise HTTPException(status_code=400, detail="paths are required")
     base = settings.downloads_dir if area == "downloads" else settings.outbox_dir
     def _remove_empty_dirs(root: str):
         for r, dnames, fnames in os.walk(root, topdown=False):
@@ -705,7 +806,7 @@ async def api_delete(payload: dict = Body(...)):
         except Exception:
             pass
         return False
-    if not paths:
+    if clear:
         # Clear everything in the selected area, including hidden legacy sidecars.
         for root, dirs, files in os.walk(base):
             try:
@@ -720,7 +821,7 @@ async def api_delete(payload: dict = Body(...)):
     else:
         deleted = 0
         removed_paths = []
-        for p in paths:
+        for p in paths or []:
             try:
                 full = safe_join(base, p)
             except ValueError:

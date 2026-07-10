@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 private actor ChunkQueue {
     private var indices: ArraySlice<Int>
@@ -45,6 +46,7 @@ final class ChunkedUploadService: @unchecked Sendable {
         onProgress: @escaping @Sendable (_ sent: Int64, _ total: Int64) -> Void
     ) async throws -> UploadReceipt {
         let initialized = try await api.initializeUpload(for: asset, chunkSize: Self.preferredChunkSize)
+        defer { Self.cleanupChunkDirectory(uploadID: initialized.uploadID) }
         let missing = initialized.missing.sorted()
         let missingSet = Set(missing)
         let chunkSize = Int64(initialized.chunkSize)
@@ -79,11 +81,13 @@ final class ChunkedUploadService: @unchecked Sendable {
                             index: index
                         )
                         defer { try? FileManager.default.removeItem(at: chunkURL) }
+                        let chunkSHA256 = try Self.sha256(fileURL: chunkURL)
 
                         try await uploadChunkWithRetry(
                             uploadID: initialized.uploadID,
                             index: index,
-                            chunkURL: chunkURL
+                            chunkURL: chunkURL,
+                            sha256: chunkSHA256
                         ) { sent, _ in
                             Task {
                                 let totalSent = await ledger.update(index: index, sent: sent)
@@ -109,13 +113,15 @@ final class ChunkedUploadService: @unchecked Sendable {
         uploadID: String,
         index: Int,
         chunkURL: URL,
+        sha256: String,
         progress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws {
         var lastError: Error?
         for attempt in 0..<3 {
             try Task.checkCancellation()
             do {
-                let request = try api.makeChunkRequest(uploadID: uploadID, index: index)
+                var request = try api.makeChunkRequest(uploadID: uploadID, index: index)
+                request.setValue(sha256, forHTTPHeaderField: "X-SHA256")
                 let result = try await uploader.upload(request: request, fromFile: chunkURL, progress: progress)
                 guard (200..<300).contains(result.response.statusCode) else {
                     throw CrossSyncAPIError.server(
@@ -167,5 +173,22 @@ final class ChunkedUploadService: @unchecked Sendable {
             remaining -= Int64(data.count)
         }
         return destination
+    }
+
+    private static func sha256(fileURL: URL) throws -> String {
+        let input = try FileHandle(forReadingFrom: fileURL)
+        defer { try? input.close() }
+        var hasher = SHA256()
+        while let data = try input.read(upToCount: 1024 * 1024), !data.isEmpty {
+            hasher.update(data: data)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func cleanupChunkDirectory(uploadID: String) {
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CrossSyncChunks", isDirectory: true)
+            .appendingPathComponent(uploadID, isDirectory: true)
+        try? FileManager.default.removeItem(at: directory)
     }
 }

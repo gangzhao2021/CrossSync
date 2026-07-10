@@ -4,6 +4,14 @@ import UIKit
 final class CrossSyncAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        BackgroundUploadSession.shared.cancelOrphanedTasks()
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
@@ -28,4 +36,3 @@ struct CrossSyncMobileApp: App {
         }
     }
 }
-

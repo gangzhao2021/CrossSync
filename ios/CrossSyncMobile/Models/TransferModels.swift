@@ -25,6 +25,7 @@ struct PreparedAsset: Identifiable, Sendable {
     let name: String
     let size: Int64
     let lastModifiedMilliseconds: Int64
+    let resumeKey: String
     let kind: AssetKind
 }
 

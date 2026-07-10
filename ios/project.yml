@@ -20,6 +20,17 @@ targets:
       - path: CrossSyncMobile
     info:
       path: CrossSyncMobile/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: CrossSync
+        CFBundleName: CrossSync
+        LSRequiresIPhoneOS: true
+        NSLocalNetworkUsageDescription: CrossSync 需要访问本地网络，将照片直接发送到你的电脑。
+        NSPhotoLibraryUsageDescription: CrossSync 仅访问你选择的照片和视频，并将原文件发送到你的电脑。
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.crosssync.mobile
@@ -39,4 +50,15 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.crosssync.mobile.tests
         GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/CrossSync.app/CrossSync"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 
+schemes:
+  CrossSyncMobile:
+    build:
+      targets:
+        CrossSyncMobile: all
+        CrossSyncMobileTests: [test]
+    test:
+      targets:
+        - CrossSyncMobileTests

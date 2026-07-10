@@ -19,13 +19,17 @@ enum CrossSyncAPIError: LocalizedError {
 
 final class CrossSyncAPI: @unchecked Sendable {
     let baseURL: URL
+    private let accessToken: String
+    private let clientID: String
     private let session: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
-    init(baseURL: URL, session: URLSession = .shared) {
+    init(baseURL: URL, accessToken: String, clientID: String, session: URLSession? = nil) {
         self.baseURL = baseURL
-        self.session = session
+        self.accessToken = accessToken
+        self.clientID = clientID
+        self.session = session ?? CrossSyncSessionFactory.make()
     }
 
     func fetchConfig() async throws -> ServerConfig {
@@ -39,11 +43,15 @@ final class CrossSyncAPI: @unchecked Sendable {
             let chunkSize: Int
             let lastModified: Int64
             let target: String
+            let clientID: String
+            let resumeKey: String
 
             enum CodingKeys: String, CodingKey {
                 case name, size, target
                 case chunkSize = "chunk_size"
                 case lastModified = "last_modified"
+                case clientID = "client_id"
+                case resumeKey = "resume_key"
             }
         }
 
@@ -52,7 +60,9 @@ final class CrossSyncAPI: @unchecked Sendable {
             size: asset.size,
             chunkSize: chunkSize,
             lastModified: asset.lastModifiedMilliseconds,
-            target: "downloads"
+            target: "downloads",
+            clientID: clientID,
+            resumeKey: asset.resumeKey
         )
         return try await send(path: "api/init-upload", method: "POST", body: encoder.encode(payload))
     }
@@ -74,6 +84,7 @@ final class CrossSyncAPI: @unchecked Sendable {
         request.httpMethod = "PUT"
         request.timeoutInterval = 60 * 30
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        applyAuthentication(to: &request)
         return request
     }
 
@@ -90,6 +101,7 @@ final class CrossSyncAPI: @unchecked Sendable {
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
+        applyAuthentication(to: &request)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -103,6 +115,10 @@ final class CrossSyncAPI: @unchecked Sendable {
         } catch {
             throw CrossSyncAPIError.invalidResponse
         }
+    }
+
+    private func applyAuthentication(to request: inout URLRequest) {
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
     }
 
     private func makeURL(path: String, queryItems: [URLQueryItem] = []) throws -> URL {
@@ -125,4 +141,3 @@ final class CrossSyncAPI: @unchecked Sendable {
         return String(data: data, encoding: .utf8) ?? "未知错误"
     }
 }
-
