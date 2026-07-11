@@ -28,25 +28,40 @@ enum CrossSyncServerTrust {
     ) {
         guard
             challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-            let serverTrust = challenge.protectionSpace.serverTrust,
-            let localCA
+            let serverTrust = challenge.protectionSpace.serverTrust
         else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
 
         let hostPolicy = SecPolicyCreateSSL(true, challenge.protectionSpace.host as CFString)
-        guard
-            SecTrustSetPolicies(serverTrust, hostPolicy) == errSecSuccess,
-            SecTrustSetAnchorCertificates(serverTrust, [localCA] as CFArray) == errSecSuccess,
-            SecTrustSetAnchorCertificatesOnly(serverTrust, true) == errSecSuccess,
-            SecTrustEvaluateWithError(serverTrust, nil)
-        else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
+        guard SecTrustSetPolicies(serverTrust, hostPolicy) == errSecSuccess else {
+            completionHandler(.performDefaultHandling, nil)
             return
         }
 
-        completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        // Prefer the current CA installed and trusted by the user. This keeps the
+        // native app working after the computer regenerates its private CA or the
+        // app is pointed at a different CrossSync computer.
+        if SecTrustEvaluateWithError(serverTrust, nil) {
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            return
+        }
+
+        // Preserve zero-extra-setup compatibility with the CA bundled at build
+        // time, without preventing the system trust store from accepting a newer
+        // CA installed on the device.
+        if
+            let localCA,
+            SecTrustSetAnchorCertificates(serverTrust, [localCA] as CFArray) == errSecSuccess,
+            SecTrustSetAnchorCertificatesOnly(serverTrust, true) == errSecSuccess,
+            SecTrustEvaluateWithError(serverTrust, nil)
+        {
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            return
+        }
+
+        completionHandler(.cancelAuthenticationChallenge, nil)
     }
 }
 

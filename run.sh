@@ -3,6 +3,7 @@ set -euo pipefail
 
 PORT=8008
 HTTPS=0
+REGENERATE_CERTIFICATE=0
 ENABLE_OTP=0
 OTP_CODE=""
 ACCESS_TOKEN=""
@@ -16,6 +17,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --https)
       HTTPS=1
+      shift
+      ;;
+    --regenerate-certificate)
+      HTTPS=1
+      REGENERATE_CERTIFICATE=1
       shift
       ;;
     --otp)
@@ -36,7 +42,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      echo "Usage: ./run.sh [--port 8008] [--https] [--access-token 123456789012] [--lan-host 192.168.1.20]"
+      echo "Usage: ./run.sh [--port 8008] [--https] [--regenerate-certificate] [--access-token 123456789012] [--lan-host 192.168.1.20]"
       exit 0
       ;;
     *)
@@ -74,12 +80,22 @@ echo "CrossSync native app access token: $CROSSSYNC_TOKEN"
 PROTO=http
 ARGS=(app.main:app --host 0.0.0.0 --port "$PORT")
 if [[ "$HTTPS" == "1" ]]; then
-  if [[ -f certs/cert.pem && -f certs/key.pem ]]; then
-    PROTO=https
-    ARGS+=(--ssl-certfile certs/cert.pem --ssl-keyfile certs/key.pem)
-  else
-    echo "HTTPS requested but certs/cert.pem and certs/key.pem were not found. Falling back to HTTP." >&2
+  CERT_HOST="$LAN_HOST"
+  if [[ -z "$CERT_HOST" ]]; then
+    CERT_HOST="$(python -c 'from app.utils import get_lan_ip; print(get_lan_ip())')"
+    export CROSSSYNC_LAN_HOST="$CERT_HOST"
   fi
+  CERT_ARGS=(--lan-host "$CERT_HOST" --port "$PORT")
+  if [[ "$REGENERATE_CERTIFICATE" == "1" ]]; then
+    CERT_ARGS+=(--force)
+  fi
+  bash scripts/setup-https.sh "${CERT_ARGS[@]}"
+  if [[ ! -f certs/cert.pem || ! -f certs/key.pem || ! -f certs/ca.crt ]]; then
+    echo "HTTPS certificate setup did not produce the required files." >&2
+    exit 1
+  fi
+  PROTO=https
+  ARGS+=(--ssl-certfile certs/cert.pem --ssl-keyfile certs/key.pem)
 fi
 
 if command -v open >/dev/null 2>&1; then

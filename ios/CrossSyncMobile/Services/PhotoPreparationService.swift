@@ -4,6 +4,21 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct PhotoPreparationFailure: Sendable {
+    let name: String
+    let message: String
+}
+
+struct PhotoPreparationResult: Sendable {
+    let assets: [PreparedAsset]
+    let failures: [PhotoPreparationFailure]
+}
+
+private enum PhotoPreparationOutcome: Sendable {
+    case success(index: Int, asset: PreparedAsset)
+    case failure(index: Int, failure: PhotoPreparationFailure)
+}
+
 private struct ImportedPhotoFile: Transferable, Sendable {
     let url: URL
     let originalName: String
@@ -35,22 +50,42 @@ struct PhotoPreparationService {
     func prepare(
         items: [PhotosPickerItem],
         onProgress: @MainActor (_ completed: Int, _ total: Int, _ currentName: String) -> Void
-    ) async throws -> [PreparedAsset] {
-        guard !items.isEmpty else { return [] }
+    ) async throws -> PhotoPreparationResult {
+        guard !items.isEmpty else { return PhotoPreparationResult(assets: [], failures: []) }
         Self.cleanupStaleWorkingFiles()
         await onProgress(0, items.count, "正在请求原片")
 
         var prepared = [PreparedAsset?](repeating: nil, count: items.count)
+        var failures = [PhotoPreparationFailure?](repeating: nil, count: items.count)
         var nextIndex = 0
         var completed = 0
         let concurrency = min(4, items.count)
 
         do {
-            try await withThrowingTaskGroup(of: (Int, PreparedAsset).self) { group in
+            try await withThrowingTaskGroup(of: PhotoPreparationOutcome.self) { group in
                 func enqueue(_ index: Int) {
                     let item = items[index]
                     group.addTask {
-                        (index, try await Self.prepareOne(item: item, index: index))
+                        do {
+                            return .success(index: index, asset: try await Self.prepareOne(item: item, index: index))
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch let error as URLError where error.code == .cancelled {
+                            throw error
+                        } catch {
+                            return .failure(
+                                index: index,
+                                failure: PhotoPreparationFailure(
+                                    name: Self.fallbackName(
+                                        kind: Self.kind(for: item.supportedContentTypes),
+                                        index: index,
+                                        types: item.supportedContentTypes,
+                                        itemIdentifier: item.itemIdentifier
+                                    ),
+                                    message: error.localizedDescription
+                                )
+                            )
+                        }
                     }
                 }
 
@@ -59,10 +94,18 @@ struct PhotoPreparationService {
                     nextIndex += 1
                 }
 
-                while let (index, asset) = try await group.next() {
-                    prepared[index] = asset
+                while let outcome = try await group.next() {
+                    let currentName: String
+                    switch outcome {
+                    case .success(let index, let asset):
+                        prepared[index] = asset
+                        currentName = asset.name
+                    case .failure(let index, let failure):
+                        failures[index] = failure
+                        currentName = failure.name
+                    }
                     completed += 1
-                    await onProgress(completed, items.count, asset.name)
+                    await onProgress(completed, items.count, currentName)
                     if nextIndex < items.count {
                         enqueue(nextIndex)
                         nextIndex += 1
@@ -74,7 +117,10 @@ struct PhotoPreparationService {
             throw error
         }
 
-        return prepared.compactMap { $0 }
+        return PhotoPreparationResult(
+            assets: prepared.compactMap { $0 },
+            failures: failures.compactMap { $0 }
+        )
     }
 
     static func cleanup(_ assets: [PreparedAsset]) {
