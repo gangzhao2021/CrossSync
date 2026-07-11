@@ -26,19 +26,19 @@ Windows starts in HTTPS mode by default so iPhone Screen Wake Lock and Home Scre
 
 The first run also generates a persistent 12-digit access token in `data/.crosssync/preferences.json`. It is printed in the terminal and shown on the computer-only QR page. Safari receives it through the QR link automatically; enter the same token in the native iPhone app's connection settings.
 
-The first HTTPS run creates a private `CrossSync Local CA` and a server certificate under `certs/`. On iPhone, open `/ca.crt`, install the profile, then go to **Settings → General → About → Certificate Trust Settings** and enable full trust for `CrossSync Local CA`. Reopen CrossSync afterward.
+The first HTTPS run creates a private `CrossSync Local CA` and a server certificate under `certs/` on Windows, macOS, and Linux. On iPhone, open `/ca.crt`, install the profile, then go to **Settings → General → About → Certificate Trust Settings** and enable full trust for `CrossSync Local CA`. Reopen CrossSync afterward.
 
 ### macOS / Linux
 
 ```bash
-./run.sh
+./run.sh --https
 ```
 
 If the script is not executable yet:
 
 ```bash
 chmod +x run.sh
-./run.sh
+./run.sh --https
 ```
 
 ### Manual
@@ -57,10 +57,13 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 - Windows HTTP compatibility mode: `.\run.ps1 -Http`
 - Regenerate Windows certificates after a network/address change: `.\run.ps1 -RegenerateCertificate`
 - macOS/Linux HTTPS: `./run.sh --https`
+- Regenerate macOS/Linux certificates: `./run.sh --regenerate-certificate`
 - Custom port: `.\run.ps1 -Port 8010` or `./run.sh --port 8010`
 - Manual LAN address: `.\run.ps1 -LanHost 192.168.1.20` or `./run.sh --lan-host 192.168.1.20`
 
-On Windows, CrossSync generates `certs/cert.pem`, `certs/key.pem`, and `certs/ca.crt` automatically using OpenSSL from Git for Windows (or another installed OpenSSL). When HTTPS is active, QR codes and app links use `https://`. If auto-detection chooses the wrong network interface, use `-LanHost 192.168.1.20` and regenerate the certificate.
+CrossSync generates `certs/cert.pem`, `certs/key.pem`, and `certs/ca.crt` automatically when HTTPS is requested. Windows uses OpenSSL from Git for Windows (or another installed OpenSSL); macOS/Linux require `openssl` on `PATH`. When HTTPS is active, QR codes and app links use `https://`. If auto-detection chooses the wrong network interface, use `-LanHost 192.168.1.20` on Windows or `--lan-host 192.168.1.20` on macOS/Linux.
+
+Changing only the LAN address keeps the existing CA and issues a new server certificate. Full certificate regeneration rotates the CA; after that, install and fully trust the new `/ca.crt` profile on iPhone. The native app accepts the current system-trusted CA first and retains the bundled CA only as a compatibility fallback, so CA rotation does not require rebuilding the app.
 
 ## Default Paths
 

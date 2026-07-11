@@ -12,6 +12,7 @@ final class TransferViewModel: ObservableObject {
     @Published private(set) var preparationTotal = 0
     @Published private(set) var currentFileName = ""
     @Published private(set) var uploadedItems = 0
+    @Published private(set) var failedItems = 0
     @Published private(set) var totalItems = 0
     @Published private(set) var currentFileProgress = 0.0
     @Published private(set) var speedBytesPerSecond = 0.0
@@ -155,11 +156,14 @@ final class TransferViewModel: ObservableObject {
                 let batchEnd = min(batchStart + batchSize, items.count)
                 let batch = Array(items[batchStart..<batchEnd])
                 phase = .preparing
-                prepared = try await PhotoPreparationService().prepare(items: batch) { [weak self] completed, _, name in
+                let preparation = try await PhotoPreparationService().prepare(items: batch) { [weak self] completed, _, name in
                     self?.preparationCompleted = batchStart + completed
                     self?.preparationTotal = items.count
                     self?.currentFileName = name
                 }
+                prepared = preparation.assets
+                failedNames.append(contentsOf: preparation.failures.map(\.name))
+                failedItems += preparation.failures.count
                 try Task.checkCancellation()
                 phase = .uploading
 
@@ -189,6 +193,7 @@ final class TransferViewModel: ObservableObject {
                         throw error
                     } catch {
                         failedNames.append(asset.name)
+                        failedItems += 1
                     }
                 }
                 PhotoPreparationService.cleanup(prepared)
@@ -259,6 +264,7 @@ final class TransferViewModel: ObservableObject {
         preparationTotal = 0
         currentFileName = ""
         uploadedItems = 0
+        failedItems = 0
         totalItems = 0
         currentFileProgress = 0
         speedBytesPerSecond = 0

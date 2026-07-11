@@ -224,11 +224,11 @@ private struct UploadingView: View {
 
             CrossSyncCard {
                 VStack(spacing: 16) {
-                    StatusRow(symbol: "checkmark.circle.fill", tint: .crossSyncGreen, title: "照片准备完成", value: "\(model.totalItems) 项")
+                    StatusRow(symbol: "checkmark.circle.fill", tint: .crossSyncGreen, title: "照片处理完成", value: "\(model.preparationCompleted) / \(model.totalItems) 项")
                     Divider().overlay(Color.crossSyncCardBorder)
                     StatusRow(symbol: "record.circle", tint: .crossSyncMagenta, title: "已经传输", value: "\(model.uploadedItems) 项")
                     Divider().overlay(Color.crossSyncCardBorder)
-                    StatusRow(symbol: "circle", tint: .crossSyncSecondaryText, title: "等待传输", value: "\(max(model.totalItems - model.uploadedItems, 0)) 项")
+                    StatusRow(symbol: "circle", tint: .crossSyncSecondaryText, title: "等待传输", value: "\(max(model.totalItems - model.uploadedItems - model.failedItems, 0)) 项")
                 }
             }
 
