@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#07101f" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="CrossSync" />
@@ -11,7 +12,7 @@
   <link rel="icon" href="/favicon.ico" />
   <link rel="apple-touch-icon" href="/static/app-icon-180.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260716-workspace1" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260717-recovery2" />
 </head>
 <body class="transfer-workspace-body">
   <div class="transfer-shell">
@@ -24,17 +25,17 @@
       <nav class="direction-nav" aria-label="传输方向">
         <button id="nav-to-computer" class="direction-nav-item is-active" type="button" aria-current="page">
           <img src="/static/icons/tabler/device-desktop.svg" alt="" />
-          <span>发送到电脑</span>
+          <span><span class="nav-label-prefix">发送</span>到电脑</span>
         </button>
         <button id="btn-send-to-iphone" class="direction-nav-item" type="button">
           <img src="/static/icons/tabler/device-mobile.svg" alt="" />
-          <span>发送到 iPhone</span>
+          <span><span class="nav-label-prefix">发送</span>到 iPhone</span>
         </button>
         <input id="input-outbox" type="file" multiple hidden />
       </nav>
 
       <div class="sidebar-bottom">
-        <button id="btn-settings" class="direction-nav-item secondary" type="button" aria-controls="utility-drawer">
+        <button id="btn-settings" class="direction-nav-item secondary" type="button" aria-label="文件管理" title="文件管理" aria-controls="utility-drawer" aria-expanded="false">
           <img src="/static/icons/tabler/folder.svg" alt="" />
           <span>文件管理</span>
         </button>
@@ -75,15 +76,15 @@
             <span id="downloads-free" class="sr-only">可用空间正在读取…</span>
           </div>
 
-          <div id="dropzone-upload" class="workspace-dropzone" role="button" tabindex="0" aria-label="选择照片或文件发送到电脑">
-            <label class="workspace-upload-action">
-              <input id="input-upload" type="file" accept="image/*,video/*" multiple hidden />
+          <div id="dropzone-upload" class="workspace-dropzone">
+            <input id="input-upload" type="file" accept="image/*,video/*" multiple hidden />
+            <button id="btn-choose-upload" class="workspace-upload-action" type="button">
               <span class="upload-icon-wrap" aria-hidden="true">
                 <img src="/static/icons/tabler/photo.svg" alt="" />
               </span>
               <span class="upload-button-copy">选择照片或文件</span>
-            </label>
-            <p>拖放到这里也可以</p>
+            </button>
+            <p class="drop-hint"><span class="desktop-drop-hint">拖放到这里也可以</span><span class="mobile-drop-hint">可一次选择多张；选完点右上角“添加”，返回后自动上传</span></p>
             <div class="selection-copy" aria-live="polite">
               <strong>已选择 <span id="selected-count">0</span> 项</strong>
               <span id="selected-meta">选择照片或视频后会立即回到 CrossSync</span>
@@ -97,7 +98,15 @@
             </div>
           </div>
 
-          <p id="picker-note" class="picker-note" hidden></p>
+          <p id="picker-note" class="picker-note" role="status" aria-live="polite" hidden></p>
+
+          <div id="pending-resume" class="pending-resume" hidden>
+            <div>
+              <strong><span id="pending-resume-count">0</span> 个传输等待续传</strong>
+              <p id="pending-resume-list">重新选择同一批照片后，将从已完成的分片继续。</p>
+            </div>
+            <button id="btn-pick-to-resume" class="btn small primary" type="button">重新选择并续传</button>
+          </div>
 
           <div id="install-guide" class="install-guide workspace-install-guide" hidden>
             <div>
@@ -110,7 +119,7 @@
             </div>
           </div>
 
-          <section class="transfer-live-region" aria-labelledby="live-transfer-title">
+          <section id="transfer-live-region" class="transfer-live-region" data-has-active="false" aria-labelledby="live-transfer-title">
             <div class="live-transfer-head">
               <div>
                 <p class="workspace-eyebrow">TRANSFER</p>
@@ -149,9 +158,9 @@
 
             <div id="upload-list" class="task-list" aria-live="polite"></div>
             <div class="queue-actions live-queue-actions">
-              <button id="btn-pause-all" class="btn small" type="button">暂停全部</button>
-              <button id="btn-resume-all" class="btn small" type="button">继续全部</button>
-              <button id="btn-clear-finished" class="btn small ghost" type="button">清理完成项</button>
+              <button id="btn-pause-all" class="btn small" type="button" disabled>暂停全部</button>
+              <button id="btn-resume-all" class="btn small" type="button" disabled>继续全部</button>
+              <button id="btn-clear-finished" class="btn small ghost" type="button" disabled>清理已结束项</button>
             </div>
           </section>
 
@@ -168,16 +177,16 @@
                 <button id="btn-refresh-downloads" class="icon-btn" type="button" title="刷新" aria-label="刷新">
                   <img src="/static/icons/tabler/refresh.svg" alt="" />
                 </button>
-                <details class="more-actions">
+                <details id="more-actions-dl" class="more-actions">
                   <summary class="btn small ghost">管理</summary>
                   <div class="more-menu">
                     <button id="btn-selectall-dl" class="btn small" type="button">全选</button>
                     <button id="btn-invert-dl" class="btn small" type="button">反选</button>
                     <button id="btn-selectnone-dl" class="btn small ghost" type="button">取消选择</button>
                     <button id="btn-download-dl-selected" class="btn small" type="button" disabled>下载选中</button>
-                    <button id="btn-del-dl-selected" class="btn small danger" type="button">删除选中</button>
-                    <button id="btn-download-dl-all" class="btn small" type="button">下载全部</button>
-                    <button id="btn-clear-dl" class="btn small danger" type="button">清空接收区</button>
+                    <button id="btn-del-dl-selected" class="btn small danger" type="button" disabled>删除选中</button>
+                    <button id="btn-download-dl-all" class="btn small" type="button" disabled>下载全部</button>
+                    <button id="btn-clear-dl" class="btn small danger" type="button" disabled>清空接收区</button>
                   </div>
                 </details>
               </div>
@@ -207,13 +216,17 @@
         </button>
       </footer>
 
-      <details id="utility-drawer" class="utility-drawer workspace-utility">
+      <div id="utility-backdrop" class="utility-backdrop" hidden></div>
+      <details id="utility-drawer" class="utility-drawer workspace-utility" role="dialog" aria-modal="true" aria-labelledby="utility-title">
         <summary>
-          <span>文件管理与传输设置</span>
+          <span id="utility-title">文件管理与传输设置</span>
           <small>管理 iPhone 共享箱、队列和高级选项</small>
         </summary>
 
         <div class="utility-content">
+          <div class="utility-close-row">
+            <button id="btn-close-utility" class="btn small ghost" type="button">关闭文件管理</button>
+          </div>
           <section class="utility-card transfer-settings-card">
             <div class="utility-head">
               <div>
@@ -239,18 +252,18 @@
             <div class="section-head">
               <div><p class="workspace-eyebrow">IPHONE</p><h2>iPhone 共享箱</h2></div>
               <div class="toolbar">
-                <button id="btn-open-outbox" class="icon-btn" type="button" title="打开目录" aria-label="打开目录"><img src="/static/icons/tabler/folder-open.svg" alt="" /></button>
-                <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /></button>
+                <button id="btn-open-outbox" class="icon-btn" type="button" title="打开目录" aria-label="打开目录"><img src="/static/icons/tabler/folder-open.svg" alt="" /><span class="mobile-action-label">打开目录</span></button>
+                <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /><span class="mobile-action-label">刷新</span></button>
                 <button id="btn-download-ob-selected" class="btn small" type="button" disabled>下载选中</button>
-                <button id="btn-del-ob-selected" class="btn small danger" type="button">删除选中</button>
-                <button id="btn-download-ob-all" class="btn small" type="button">下载全部</button>
-                <details class="more-actions">
+                <button id="btn-del-ob-selected" class="btn small danger" type="button" disabled>删除选中</button>
+                <button id="btn-download-ob-all" class="btn small" type="button" disabled>下载全部</button>
+                <details id="more-actions-ob" class="more-actions">
                   <summary class="btn small ghost">更多</summary>
                   <div class="more-menu">
                     <button id="btn-selectall-ob" class="btn small" type="button">全选</button>
                     <button id="btn-invert-ob" class="btn small" type="button">反选</button>
                     <button id="btn-selectnone-ob" class="btn small ghost" type="button">取消选择</button>
-                    <button id="btn-clear-ob" class="btn small danger" type="button">清空</button>
+                    <button id="btn-clear-ob" class="btn small danger" type="button" disabled>清空</button>
                   </div>
                 </details>
               </div>
@@ -275,7 +288,7 @@
     const DEFAULT_CHUNK = {{ chunk_size }};
     const MAX_CONCURRENCY = {{ max_concurrency }};
   </script>
-  <script src="/static/app.js?v=20260716-workspace1"></script>
+  <script src="/static/app.js?v=20260717-recovery2"></script>
   <script>
     if (window.location.hash.includes("figmacapture=")) {
       document.write('<script src="https://mcp.figma.com/mcp/html-to-design/capture.js"><\/script>');
