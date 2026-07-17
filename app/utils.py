@@ -71,6 +71,35 @@ def file_fingerprint(
     client_id: str = "",
     resume_key: str = "",
 ) -> str:
+    """Build a resumable-upload identity.
+
+    A caller-provided resume key is stable across iOS re-selection, where the
+    browser may change the exported filename or last-modified timestamp.  The
+    legacy metadata fingerprint remains available for sessions created before
+    this identity format was introduced.
+    """
+    m = hashlib.sha256()
+    if resume_key:
+        values = ("resume-v2", client_id, resume_key, str(size))
+    else:
+        # Keep the original metadata-only identity byte-for-byte compatible for
+        # older clients that do not send a resume key.
+        values = (client_id, resume_key, name, str(size), str(last_modified or 0))
+    for value in values:
+        encoded = value.encode("utf-8")
+        m.update(len(encoded).to_bytes(8, "big"))
+        m.update(encoded)
+    return m.hexdigest()
+
+
+def legacy_file_fingerprint(
+    name: str,
+    size: int,
+    last_modified: Optional[int],
+    client_id: str = "",
+    resume_key: str = "",
+) -> str:
+    """Fingerprint used by CrossSync releases before resume-v2."""
     m = hashlib.sha256()
     for value in (client_id, resume_key, name, str(size), str(last_modified or 0)):
         encoded = value.encode("utf-8")

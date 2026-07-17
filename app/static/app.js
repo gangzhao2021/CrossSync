@@ -5,11 +5,13 @@ const OPEN_KEY = 'crosssync_open_on_finish';
 const DATE_SUBDIR_KEY = 'crosssync_date_subdir';
 const VERIFY_KEY = 'crosssync_verify_chunks';
 const CLIENT_ID_KEY = 'crosssync_client_id';
+const PENDING_UPLOADS_KEY = 'crosssync_pending_uploads_v1';
+const PENDING_UPLOAD_TTL_MS = 48 * 60 * 60 * 1000;
 const MOBILE_CHUNK_SIZE = 16 * 1024 * 1024;
 const MOBILE_MAX_CONCURRENCY = 4;
 const DESKTOP_MAX_CONCURRENCY = 4;
 const CHUNK_TIMEOUT_MS = 180000;
-const MAX_CHUNK_ATTEMPTS = 8;
+const MAX_CHUNK_ATTEMPTS = 60;
 const WAKE_KEEPALIVE_INTERVAL_MS = 15000;
 const WAKE_REQUEST_TIMEOUT_MS = 2500;
 
@@ -35,12 +37,18 @@ const els = {
   dropTitle: $('drop-title'),
   dropSubtitle: $('drop-subtitle'),
   dzUpload: $('dropzone-upload'),
+  btnChooseUpload: $('btn-choose-upload'),
   inputUpload: $('input-upload'),
+  liveTransferRegion: $('transfer-live-region'),
   listUpload: $('upload-list'),
   chkOpen: $('chk-open'),
   chkDateSubdir: $('chk-date-subdir'),
   chkVerify: $('chk-verify'),
   pickerNote: $('picker-note'),
+  pendingResume: $('pending-resume'),
+  pendingResumeCount: $('pending-resume-count'),
+  pendingResumeList: $('pending-resume-list'),
+  btnPickToResume: $('btn-pick-to-resume'),
   downloadsPath: $('downloads-path'),
   downloadsPathStatus: $('downloads-path-status'),
   downloadsFree: $('downloads-free'),
@@ -51,6 +59,8 @@ const els = {
   btnSendToIphone: $('btn-send-to-iphone'),
   btnSettings: $('btn-settings'),
   utilityDrawer: $('utility-drawer'),
+  utilityBackdrop: $('utility-backdrop'),
+  btnCloseUtility: $('btn-close-utility'),
   selectedCount: $('selected-count'),
   selectedMeta: $('selected-meta'),
   selectedMediaGrid: $('selected-media-grid'),
@@ -95,6 +105,7 @@ const runtimeConfig = {
 let taskSeq = 0;
 let lastAggBytes = 0;
 let lastAggTime = performance.now();
+const claimedPendingUploadIds = new Set();
 
 function storeGet(key, fallback = '') {
   try {
@@ -108,6 +119,108 @@ function storeSet(key, value) {
   try {
     localStorage.setItem(key, value);
   } catch (_) {}
+}
+
+function legacyPendingUploadIdentity({ relName, size, lastModified, target }) {
+  return [target, relName, size, lastModified || 0].map((value) => encodeURIComponent(String(value))).join('|');
+}
+
+function randomResumeKey() {
+  return window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function fileSampleSignature(file) {
+  if (!window.crypto?.subtle || typeof file?.slice !== 'function') return '';
+  const sampleSize = 64 * 1024;
+  const head = await file.slice(0, Math.min(file.size, sampleSize)).arrayBuffer();
+  const tailStart = Math.max(0, file.size - sampleSize);
+  const tail = tailStart > 0 ? await file.slice(tailStart, file.size).arrayBuffer() : new ArrayBuffer(0);
+  const bytes = new Uint8Array(head.byteLength + tail.byteLength);
+  bytes.set(new Uint8Array(head), 0);
+  bytes.set(new Uint8Array(tail), head.byteLength);
+  const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function readPendingUploads() {
+  try {
+    const parsed = JSON.parse(storeGet(PENDING_UPLOADS_KEY, '[]'));
+    if (!Array.isArray(parsed)) return [];
+    const cutoff = Date.now() - PENDING_UPLOAD_TTL_MS;
+    return parsed
+      .filter((item) => item && typeof item.id === 'string' && Number(item.updatedAt || 0) >= cutoff)
+      .slice(0, 500);
+  } catch (_) {
+    return [];
+  }
+}
+
+function writePendingUploads(items) {
+  storeSet(PENDING_UPLOADS_KEY, JSON.stringify(items.slice(0, 500)));
+  renderPendingUploads();
+}
+
+async function rememberPendingUpload(file, target, relName) {
+  let assetSignature = '';
+  try {
+    assetSignature = await fileSampleSignature(file);
+  } catch (_) {}
+
+  const pending = readPendingUploads();
+  const exactLegacyId = legacyPendingUploadIdentity({
+    relName,
+    size: file.size,
+    lastModified: file.lastModified,
+    target,
+  });
+  const match = pending.find((item) => (
+    !claimedPendingUploadIds.has(item.id)
+    && item.target === target
+    && Number(item.size) === file.size
+    && (
+      (assetSignature && item.assetSignature === assetSignature)
+      || item.id === exactLegacyId
+    )
+  ));
+  const resumeKey = match?.resumeKey || (match ? `${file.name}:${file.size}:${file.lastModified}` : randomResumeKey());
+  const record = {
+    id: match?.id || [target, resumeKey].map((value) => encodeURIComponent(String(value))).join('|'),
+    resumeKey,
+    assetSignature,
+    name: file.name || relName,
+    relName,
+    size: file.size,
+    lastModified: file.lastModified || 0,
+    target,
+    updatedAt: Date.now(),
+  };
+  claimedPendingUploadIds.add(record.id);
+  const existing = pending.filter((item) => item.id !== record.id);
+  writePendingUploads([record, ...existing]);
+  return record;
+}
+
+function forgetPendingUpload(id) {
+  if (!id) return;
+  claimedPendingUploadIds.delete(id);
+  writePendingUploads(readPendingUploads().filter((item) => item.id !== id));
+}
+
+function releasePendingUpload(id) {
+  if (id) claimedPendingUploadIds.delete(id);
+}
+
+function renderPendingUploads() {
+  if (!els.pendingResume) return;
+  const pending = readPendingUploads().filter((item) => item.target === 'downloads');
+  els.pendingResume.hidden = pending.length === 0;
+  if (!pending.length) return;
+  if (els.pendingResumeCount) els.pendingResumeCount.textContent = String(pending.length);
+  if (els.pendingResumeList) {
+    const names = pending.slice(0, 3).map((item) => item.name).join('、');
+    const more = pending.length > 3 ? ` 等 ${pending.length} 项` : '';
+    els.pendingResumeList.textContent = `${names}${more}；重新选择原文件后自动跳过已完成分片。`;
+  }
 }
 
 function browserClientId() {
@@ -170,6 +283,28 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+class UploadLanePool {
+  constructor(limit) {
+    this.limit = Math.max(1, limit || 1);
+    this.active = 0;
+    this.waiters = [];
+  }
+
+  async acquire() {
+    if (this.active >= this.limit) {
+      await new Promise((resolve) => this.waiters.push(resolve));
+    }
+    this.active += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active = Math.max(0, this.active - 1);
+      this.waiters.shift()?.();
+    };
+  }
+}
+
 function formatBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let value = Number(bytes) || 0;
@@ -228,12 +363,18 @@ function uploadConcurrency(missingCount) {
   return Math.max(1, Math.min(MAX_CONCURRENCY || 1, cap, Math.max(1, missingCount || 1)));
 }
 
+// One shared pool avoids hundreds of simultaneous requests when a user picks a
+// large photo batch, while still keeping all four LAN lanes busy.
+const uploadLanePool = new UploadLanePool(Math.min(MAX_CONCURRENCY || 1, MOBILE_MAX_CONCURRENCY));
+
 function shouldVerifyUploadChunks() {
   return storeGet(VERIFY_KEY) === '1' && !isAppleMobile();
 }
 
 function shouldUseStreamUpload(file) {
-  return isAppleMobile() && file.size <= 32 * 1024 * 1024 && storeGet(VERIFY_KEY) !== '1';
+  // iOS can suspend Safari at any time. Always use the resumable chunk protocol
+  // so even small photos never have to restart from byte zero after interruption.
+  return false;
 }
 
 function isStandaloneMode() {
@@ -776,6 +917,12 @@ function updateSummary() {
   if (els.lanePreparing) els.lanePreparing.dataset.active = String(pickerPreparing || preparing > 0);
   if (els.laneWaiting) els.laneWaiting.dataset.active = String(waiting > 0);
   if (els.laneUploading) els.laneUploading.dataset.active = String(uploading > 0);
+  if (els.liveTransferRegion) els.liveTransferRegion.dataset.hasActive = String(active > 0 || pickerPreparing);
+  if (els.btnPauseAll) els.btnPauseAll.disabled = !tasks.some((task) => ['preparing', 'active'].includes(task.state));
+  if (els.btnResumeAll) els.btnResumeAll.disabled = !tasks.some((task) => task.state === 'paused');
+  if (els.btnClearFinished) {
+    els.btnClearFinished.disabled = !tasks.some((task) => ['completed', 'failed', 'cancelled'].includes(task.state));
+  }
 }
 
 setInterval(updateSummary, 1000);
@@ -815,8 +962,10 @@ function createTaskItem(file, target) {
   const hashLine = h('div', { class: 'hash-line' });
   const pauseBtn = h('button', { class: 'btn small', type: 'button', text: '暂停' });
   const resumeBtn = h('button', { class: 'btn small', type: 'button', text: '继续' });
+  const retryBtn = h('button', { class: 'btn small', type: 'button', text: '重试' });
   const cancelBtn = h('button', { class: 'btn small ghost', type: 'button', text: '取消' });
   resumeBtn.disabled = true;
+  retryBtn.disabled = true;
 
   const item = h('div', { class: 'task-item' },
     h('div', { class: 'task-top' },
@@ -825,12 +974,12 @@ function createTaskItem(file, target) {
     ),
     h('div', { class: 'bar' }, barInner),
     h('div', { class: 'task-meta' }, sizeSpan, h('span', { text: '·' }), speedSpan, h('span', { text: '·' }), etaSpan),
-    h('div', { class: 'task-actions' }, pauseBtn, resumeBtn, cancelBtn),
+    h('div', { class: 'task-actions' }, pauseBtn, resumeBtn, retryBtn, cancelBtn),
     hashLine
   );
 
   els.listUpload?.prepend(item);
-  return { item, barInner, sizeSpan, speedSpan, etaSpan, stateSpan, hashLine, pauseBtn, resumeBtn, cancelBtn };
+  return { item, barInner, sizeSpan, speedSpan, etaSpan, stateSpan, hashLine, pauseBtn, resumeBtn, retryBtn, cancelBtn };
 }
 
 function renderTask(task, ui) {
@@ -865,7 +1014,9 @@ function renderTask(task, ui) {
 
   ui.pauseBtn.disabled = !['active', 'preparing'].includes(task.state);
   ui.resumeBtn.disabled = task.state !== 'paused';
-  ui.cancelBtn.disabled = ['completed', 'failed', 'cancelled'].includes(task.state);
+  ui.retryBtn.disabled = task.state !== 'failed';
+  ui.cancelBtn.disabled = ['completed', 'cancelled'].includes(task.state);
+  ui.cancelBtn.textContent = task.state === 'failed' ? '放弃续传' : '取消';
   if (task.lastError && ['active', 'failed'].includes(task.state)) {
     ui.hashLine.textContent = task.lastError;
   } else if (task.state !== 'completed') {
@@ -874,10 +1025,29 @@ function renderTask(task, ui) {
   updateSummary();
 }
 
+function cancelServerUpload(uploadId) {
+  if (!uploadId) return Promise.resolve();
+  return fetch(`/api/upload/${encodeURIComponent(uploadId)}`, {
+    method: 'DELETE',
+    keepalive: true,
+  }).catch(() => {});
+}
+
 async function uploadChunkWithRetry({ uploadId, idx, chunk, verify, task, controllers, render }) {
   for (let attempt = 0; attempt < MAX_CHUNK_ATTEMPTS; attempt += 1) {
     while (task.state === 'paused') await delay(150);
     if (task.state === 'cancelled') throw new Error('cancelled');
+
+    const releaseLane = await uploadLanePool.acquire();
+    if (task.state === 'cancelled') {
+      releaseLane();
+      throw new Error('cancelled');
+    }
+    if (task.state === 'paused') {
+      releaseLane();
+      attempt -= 1;
+      continue;
+    }
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => {
@@ -935,6 +1105,7 @@ async function uploadChunkWithRetry({ uploadId, idx, chunk, verify, task, contro
     } finally {
       window.clearTimeout(timeoutId);
       controllers.delete(controller);
+      releaseLane();
     }
   }
 }
@@ -981,9 +1152,13 @@ function uploadFileStream({ file, target, relName, task, controllers, render }) 
 }
 
 async function startUpload(file, target) {
+  const relName = buildRelName(file);
+  const pendingUpload = await rememberPendingUpload(file, target, relName);
+  const pendingUploadId = pendingUpload.id;
   const ui = createTaskItem(file, target);
   const controllers = new Set();
   let fatalError = null;
+  let uploadId = null;
 
   const task = {
     id: ++taskSeq,
@@ -1008,24 +1183,35 @@ async function startUpload(file, target) {
       renderTask(this, ui);
     },
     cancel() {
-      if (['completed', 'failed', 'cancelled'].includes(this.state)) return;
+      if (['completed', 'cancelled'].includes(this.state)) return;
       this.state = 'cancelled';
       controllers.forEach((controller) => controller.abort());
+      void cancelServerUpload(uploadId);
+      forgetPendingUpload(pendingUploadId);
       renderTask(this, ui);
       wakeKeeper.releaseIfIdle();
+    },
+    retry() {
+      if (this.state !== 'failed') return;
+      const index = tasks.indexOf(this);
+      if (index >= 0) tasks.splice(index, 1);
+      ui.item.remove();
+      releasePendingUpload(pendingUploadId);
+      updateSummary();
+      void startUpload(file, target);
     },
   };
 
   ui.item.dataset.taskId = String(task.id);
   ui.pauseBtn.addEventListener('click', () => task.pause());
   ui.resumeBtn.addEventListener('click', () => task.resume());
+  ui.retryBtn.addEventListener('click', () => task.retry());
   ui.cancelBtn.addEventListener('click', () => task.cancel());
   tasks.push(task);
   renderTask(task, ui);
 
   try {
     await wakeKeeper.requestForTransfer();
-    const relName = buildRelName(file);
     if (shouldUseStreamUpload(file)) {
       try {
         task.state = 'active';
@@ -1039,15 +1225,16 @@ async function startUpload(file, target) {
           controllers,
           render: () => renderTask(task, ui),
         });
-        if (task.state === 'cancelled') return;
+        if (task.state === 'cancelled') return task;
         task.uploaded = task.size;
         task.state = 'completed';
+        forgetPendingUpload(pendingUploadId);
         if (streamRes?.sha256) ui.hashLine.textContent = `SHA-256: ${streamRes.sha256}`;
         renderTask(task, ui);
         refreshArea(target);
-        return;
+        return task;
       } catch (err) {
-        if (task.state === 'cancelled') return;
+        if (task.state === 'cancelled') return task;
         while (task.state === 'paused') await delay(150);
         task.uploaded = 0;
         task.state = 'preparing';
@@ -1064,14 +1251,22 @@ async function startUpload(file, target) {
         chunk_size: uploadChunkSize(),
         last_modified: file.lastModified,
         client_id: browserClientId(),
-        resume_key: `${file.name}:${file.size}:${file.lastModified}`,
+        resume_key: pendingUpload.resumeKey,
         target,
       }),
     });
 
-    if (task.state === 'cancelled') return;
+    uploadId = initRes.upload_id;
+    if (task.state === 'cancelled') {
+      void cancelServerUpload(uploadId);
+      return task;
+    }
+    while (task.state === 'paused') await delay(150);
+    if (task.state === 'cancelled') {
+      void cancelServerUpload(uploadId);
+      return task;
+    }
 
-    const uploadId = initRes.upload_id;
     const chunkSize = initRes.chunk_size;
     const totalChunks = initRes.total_chunks;
     const missing = new Set(initRes.missing || []);
@@ -1103,7 +1298,7 @@ async function startUpload(file, target) {
             uploadId,
             idx,
             chunk,
-          verify: shouldVerifyUploadChunks(),
+            verify: shouldVerifyUploadChunks(),
             task,
             controllers,
             render: () => renderTask(task, ui),
@@ -1122,7 +1317,7 @@ async function startUpload(file, target) {
     const concurrency = uploadConcurrency(missingQueue.length);
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-    if (task.state === 'cancelled') return;
+    if (task.state === 'cancelled') return task;
     if (fatalError) throw fatalError;
 
     task.state = 'finishing';
@@ -1133,18 +1328,21 @@ async function startUpload(file, target) {
 
     task.uploaded = task.size;
     task.state = 'completed';
+    forgetPendingUpload(pendingUploadId);
     if (finishRes?.sha256) ui.hashLine.textContent = `SHA-256: ${finishRes.sha256}`;
     renderTask(task, ui);
     refreshArea(target);
   } catch (err) {
     if (task.state !== 'cancelled') {
       task.state = 'failed';
-      ui.hashLine.textContent = err?.message ? `错误：${err.message}` : '传输失败';
+      task.lastError = err?.message ? `错误：${err.message}` : '传输失败';
+      releasePendingUpload(pendingUploadId);
       renderTask(task, ui);
     }
   } finally {
     wakeKeeper.releaseIfIdle();
   }
+  return task;
 }
 
 let selectionObjectUrls = [];
@@ -1192,15 +1390,49 @@ function renderSelection(files) {
 
 function handleFiles(files, target) {
   wakeKeeper.resumeAfterPicker();
-  const selected = [...files].filter(Boolean);
+  const selected = Array.from(files || []).filter(Boolean);
   if (!selected.length) {
+    if (els.pickerNote) {
+      els.pickerNote.hidden = false;
+      els.pickerNote.dataset.tone = 'error';
+      els.pickerNote.textContent = '没有收到所选照片。请重新打开照片图库，选择后点击右上角“添加”。';
+    }
     wakeKeeper.releaseIfIdle();
     return;
   }
-  renderSelection(selected);
+  if (els.pickerNote) {
+    els.pickerNote.hidden = false;
+    els.pickerNote.dataset.tone = 'success';
+    els.pickerNote.textContent = `已收到 ${selected.length} 项，正在创建可续传任务…`;
+  }
+  try {
+    renderSelection(selected);
+  } catch (error) {
+    if (els.pickerNote) {
+      els.pickerNote.dataset.tone = 'error';
+      els.pickerNote.textContent = `已收到照片，但预览失败；仍将继续传输。${error?.message || ''}`;
+    }
+  }
   wakeKeeper.requestForTransfer();
-  selected.forEach((file) => startUpload(file, target));
+  const started = selected.map((file) => startUpload(file, target));
+  Promise.allSettled(started).then((results) => {
+    const completed = results.filter((result) => result.status === 'fulfilled' && result.value?.state === 'completed').length;
+    const failed = results.length - completed;
+    renderSelection([]);
+    if (!els.pickerNote) return;
+    els.pickerNote.hidden = false;
+    if (failed > 0) {
+      els.pickerNote.dataset.tone = 'error';
+      els.pickerNote.textContent = `本批已完成 ${completed} 项，${failed} 项待重试；失败原因显示在任务卡片中。`;
+    } else {
+      els.pickerNote.dataset.tone = 'success';
+      els.pickerNote.textContent = `${completed} 项已全部保存到${target === 'downloads' ? '电脑' : ' iPhone 共享箱'}。`;
+    }
+  });
   if (els.inputUpload) els.inputUpload.value = '';
+  window.setTimeout(() => {
+    els.liveTransferRegion?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 120);
 }
 
 function preventDefaults(event) {
@@ -1224,19 +1456,27 @@ if (els.dzUpload && els.inputUpload) {
   });
   els.dzUpload.addEventListener('click', (event) => {
     if (event.target === els.inputUpload) return;
-    if (event.target.closest?.('.pick-btn, .choose-photos-button')) return;
+    if (event.target.closest?.('.workspace-upload-action, .pick-btn, .choose-photos-button')) return;
     els.inputUpload.click();
   });
-  els.dzUpload.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      els.inputUpload.click();
-    }
+  els.btnChooseUpload?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    els.inputUpload.click();
   });
   els.inputUpload.addEventListener('click', () => wakeKeeper.suspendForPicker());
   els.inputUpload.addEventListener('cancel', () => wakeKeeper.resumeAfterPicker());
-  els.inputUpload.addEventListener('change', (event) => handleFiles(event.target.files, 'downloads'));
+  els.inputUpload.addEventListener('change', (event) => {
+    const files = Array.from(event.currentTarget.files || []);
+    event.currentTarget.value = '';
+    handleFiles(files, 'downloads');
+  });
 }
+
+els.btnPickToResume?.addEventListener('click', () => {
+  wakeKeeper.suspendForPicker();
+  els.inputUpload?.click();
+});
+renderPendingUploads();
 
 if (els.btnSendToIphone && els.inputOutbox) {
   els.btnSendToIphone.addEventListener('click', () => els.inputOutbox.click());
@@ -1246,10 +1486,43 @@ if (els.btnSendToIphone && els.inputOutbox) {
   });
 }
 
-els.btnSettings?.addEventListener('click', () => {
+function setUtilityDrawer(open, { restoreFocus = false } = {}) {
   if (!els.utilityDrawer) return;
-  els.utilityDrawer.open = true;
-  els.utilityDrawer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  els.utilityDrawer.open = open;
+  els.btnSettings?.setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('utility-open', open);
+  if (els.utilityBackdrop) els.utilityBackdrop.hidden = !open;
+  if (open) {
+    window.setTimeout(() => els.btnCloseUtility?.focus({ preventScroll: true }), 0);
+  } else if (restoreFocus) {
+    els.btnSettings?.focus({ preventScroll: true });
+  }
+}
+
+els.btnSettings?.addEventListener('click', () => setUtilityDrawer(!els.utilityDrawer?.open));
+els.btnCloseUtility?.addEventListener('click', () => setUtilityDrawer(false, { restoreFocus: true }));
+els.utilityBackdrop?.addEventListener('click', () => setUtilityDrawer(false, { restoreFocus: true }));
+
+els.utilityDrawer?.addEventListener('toggle', () => {
+  const open = els.utilityDrawer.open;
+  els.btnSettings?.setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('utility-open', open);
+  if (els.utilityBackdrop) els.utilityBackdrop.hidden = !open;
+});
+
+els.utilityDrawer?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab' || !els.utilityDrawer?.open) return;
+  const focusable = [...els.utilityDrawer.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 });
 
 els.btnPauseAll?.addEventListener('click', () => tasks.forEach((task) => task.pause?.()));
@@ -1257,7 +1530,7 @@ els.btnResumeAll?.addEventListener('click', () => tasks.forEach((task) => task.r
 els.btnClearFinished?.addEventListener('click', () => {
   for (let idx = tasks.length - 1; idx >= 0; idx -= 1) {
     const task = tasks[idx];
-    if (['completed', 'cancelled'].includes(task.state)) {
+    if (['completed', 'failed', 'cancelled'].includes(task.state)) {
       document.querySelector(`[data-task-id="${task.id}"]`)?.remove();
       tasks.splice(idx, 1);
     }
@@ -1301,6 +1574,7 @@ const areaState = {
     deleteQuick: $('btn-dl-del-quick'),
     cancelSelection: $('btn-dl-cancel-sel'),
     clear: $('btn-clear-dl'),
+    more: $('more-actions-dl'),
     files: [],
     empty: '电脑接收区暂无文件',
   },
@@ -1319,6 +1593,7 @@ const areaState = {
     deleteQuick: $('btn-ob-del-quick'),
     cancelSelection: $('btn-ob-cancel-sel'),
     clear: $('btn-clear-ob'),
+    more: $('more-actions-ob'),
     files: [],
     empty: 'iPhone 共享箱暂无文件',
   },
@@ -1338,6 +1613,17 @@ function updateSelection(area) {
   if (cfg.selectedCount) cfg.selectedCount.textContent = String(count);
   if (cfg.selectedBar) cfg.selectedBar.hidden = count === 0;
   if (cfg.selectedDownload) cfg.selectedDownload.disabled = count === 0;
+  if (cfg.deleteSelected) cfg.deleteSelected.disabled = count === 0;
+  if (cfg.deleteQuick) cfg.deleteQuick.disabled = count === 0;
+  const empty = cfg.files.length === 0;
+  [cfg.allDownload, cfg.selectAll, cfg.invertSelection, cfg.selectNone, cfg.clear].forEach((control) => {
+    if (control) control.disabled = empty;
+  });
+  if (cfg.more) {
+    cfg.more.toggleAttribute('data-disabled', empty);
+    cfg.more.querySelector('summary')?.setAttribute('aria-disabled', String(empty));
+    if (empty) cfg.more.removeAttribute('open');
+  }
 }
 
 function downloadUrl(area, path) {
@@ -1447,7 +1733,7 @@ function renderArea(area) {
 
     const item = h('div', { class: 'file-item', dataset: { path: file.path } },
       h('div', { class: 'file-row' },
-        checkbox,
+        h('label', { class: 'file-check-wrap' }, checkbox),
         h('img', { class: 'file-type-icon', src: fileIconPath(file.path), alt: '' }),
         h('div', { class: 'file-main' }, link, meta, verifyStatus),
         h('div', { class: 'file-actions' }, verify, download)
@@ -1512,6 +1798,9 @@ async function clearArea(area) {
 }
 
 Object.entries(areaState).forEach(([area, cfg]) => {
+  cfg.more?.querySelector('summary')?.addEventListener('click', (event) => {
+    if (!cfg.files.length) event.preventDefault();
+  });
   cfg.open?.addEventListener('click', async () => {
     try {
       const data = await fetchJson(`/api/open/${area}`, { method: 'POST' });
@@ -1588,13 +1877,12 @@ refreshRuntimeConfig().finally(() => {
 $('nav-to-computer')?.addEventListener('click', () => {
   setDirection('downloads');
   els.dzUpload?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  els.dzUpload?.focus({ preventScroll: true });
+  els.btnChooseUpload?.focus({ preventScroll: true });
 });
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || !els.utilityDrawer?.open) return;
-  els.utilityDrawer.open = false;
-  els.btnSettings?.focus();
+  setUtilityDrawer(false, { restoreFocus: true });
 });
 initPwa();
 setInterval(() => {

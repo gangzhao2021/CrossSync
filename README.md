@@ -8,9 +8,9 @@ CrossSync is a local LAN file-transfer app for moving files directly between iPh
 
 - iPhone -> computer: choose files on iPhone and they are written directly into the computer's selected receive folder. No second browser download is needed.
 - Computer -> iPhone: open the same web app on the computer, upload files into `data/outbox`, then download them from iPhone.
-- Large files are uploaded in resumable chunks. If the phone disconnects or the browser is interrupted, choose the same file again to continue missing chunks.
+- All iPhone files are uploaded in resumable chunks, including small photos. If the phone disconnects or the browser is interrupted, reopen CrossSync and choose the same files again; completed chunks are skipped automatically.
 - The mobile UI starts a keep-awake guard during transfer. It uses Screen Wake Lock when available and falls back to a visible local looping video for Safari/HTTP LAN sessions.
-- iPhone uploads use a fast path: small files can stream directly, while larger videos use 16 MB chunks, up to four upload lanes, direct server-side writes, and automatic per-chunk timeout/retry.
+- iPhone uploads use 16 MB resumable chunks, a shared pool of up to four upload lanes, direct server-side writes, and automatic per-chunk timeout/retry. The shared pool stays fast on LAN without flooding Safari when a large batch is selected.
 - The file lists support single-file download, selected ZIP download, delete, and open-folder actions.
 - Completed uploads record SHA-256 checksums in hidden app metadata, so integrity can be verified without adding extra `.sha256` files to normal downloads.
 
@@ -86,6 +86,8 @@ Keep CrossSync in the foreground while transferring. Native Screen Wake Lock is 
 The keep-awake guard starts only after iOS returns selected files to the page, so it does not compete with the Photos picker. If the guard is released, return to CrossSync and tap the on-screen re-enable action.
 
 If iOS blocks both browser keep-awake methods, the transfer is still resumable: unlock the phone, reopen the page, choose the same file again, and CrossSync will continue from the missing chunks.
+
+CrossSync keeps a local list of unfinished browser uploads for 48 hours, matching the server's temporary upload retention. After a page reload, the workbench shows **重新选择并续传** with the pending filenames. Safari does not let a web page reopen Photo Library files silently, so this re-selection is required after iOS discards the page; already uploaded chunks are not sent again.
 
 For large videos, keep the page in the foreground until the file completes. If a single chunk stalls, CrossSync aborts that chunk after 180 seconds and retries it automatically.
 

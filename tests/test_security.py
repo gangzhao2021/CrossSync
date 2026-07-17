@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -8,8 +9,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.main import api_delete, app, init_upload
+from app.main import api_delete, app, cancel_upload, init_upload
 from app.uploader import (
+    UploadStore,
     release_reserved_path,
     reserve_unique_path_nested,
     sanitize_rel_path,
@@ -60,10 +62,85 @@ class UploadBoundaryTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertNotEqual(first, third)
 
+    def test_resume_key_survives_changed_ios_export_metadata(self):
+        first = file_fingerprint("IMG_0001.HEIC", 100, 123456, "phone-a", "asset-stable")
+        reselected = file_fingerprint("IMG_0001.JPG", 100, 999999, "phone-a", "asset-stable")
+        self.assertEqual(first, reselected)
+
+    def test_cancelling_upload_releases_reserved_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            downloads = os.path.join(directory, "downloads")
+            sessions = os.path.join(directory, "sessions")
+            os.makedirs(downloads)
+            store = UploadStore(sessions)
+            payload = {
+                "name": "IMG_0002.HEIC",
+                "size": 12,
+                "chunk_size": 4,
+                "client_id": "iphone-browser",
+                "resume_key": "asset-cancel",
+                "target": "downloads",
+            }
+
+            with (
+                patch("app.main.upload_store", store),
+                patch.object(settings, "downloads_dir", downloads),
+                patch.object(settings, "direct_upload_assembly", True),
+                patch.object(settings, "min_chunk_size", 1),
+            ):
+                initial = json.loads(asyncio.run(init_upload(payload)).body)
+                self.assertEqual(store.reserved_bytes(), 12)
+                cancelled = json.loads(asyncio.run(cancel_upload(initial["upload_id"])).body)
+                self.assertTrue(cancelled["removed"])
+                self.assertEqual(store.reserved_bytes(), 0)
+
     def test_init_rejects_invalid_chunk_size(self):
         with self.assertRaises(HTTPException) as context:
             asyncio.run(init_upload({"name": "photo.jpg", "size": 10, "chunk_size": 0}))
         self.assertEqual(context.exception.status_code, 400)
+
+    def test_reselecting_same_file_resumes_only_missing_chunks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            downloads = os.path.join(directory, "downloads")
+            sessions = os.path.join(directory, "sessions")
+            os.makedirs(downloads)
+            store = UploadStore(sessions)
+            payload = {
+                "name": "IMG_0001.HEIC",
+                "size": 12,
+                "chunk_size": 4,
+                "last_modified": 123456,
+                "client_id": "iphone-browser",
+                "resume_key": "IMG_0001.HEIC:12:123456",
+                "target": "downloads",
+            }
+
+            with (
+                patch("app.main.upload_store", store),
+                patch.object(settings, "downloads_dir", downloads),
+                patch.object(settings, "direct_upload_assembly", True),
+                patch.object(settings, "min_chunk_size", 1),
+            ):
+                initial = json.loads(asyncio.run(init_upload(payload)).body)
+                self.assertFalse(initial["resumed"])
+                self.assertEqual(initial["missing"], [0, 1, 2])
+
+                temp_chunk = store.chunk_temp_path(initial["upload_id"], 0)
+                with open(temp_chunk, "wb") as stream:
+                    stream.write(b"1234")
+                store.commit_streamed_chunk(
+                    initial["upload_id"],
+                    0,
+                    temp_chunk,
+                    expected_size=4,
+                    offset=0,
+                    direct=True,
+                )
+
+                resumed = json.loads(asyncio.run(init_upload(payload)).body)
+                self.assertTrue(resumed["resumed"])
+                self.assertEqual(resumed["upload_id"], initial["upload_id"])
+                self.assertEqual(resumed["missing"], [1, 2])
 
     def test_delete_requires_explicit_clear_flag(self):
         with self.assertRaises(HTTPException) as context:

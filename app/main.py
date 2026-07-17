@@ -24,6 +24,7 @@ from .utils import (
     file_fingerprint,
     folder_picker_available,
     get_lan_ip,
+    legacy_file_fingerprint,
     open_folder,
     pick_folder,
     safe_join,
@@ -292,6 +293,12 @@ async def init_upload(payload: dict = Body(...)):
     fingerprint = file_fingerprint(name, size, last_modified, client_id, resume_key)
     # Try find existing unfinished session
     existing = upload_store.find_by_fingerprint(fingerprint, target=target)
+    if not existing and resume_key:
+        legacy_fingerprint = legacy_file_fingerprint(name, size, last_modified, client_id, resume_key)
+        existing = upload_store.find_by_fingerprint(legacy_fingerprint, target=target)
+        if existing:
+            existing.fingerprint = fingerprint
+            upload_store.update_meta(existing)
     if existing:
         can_resume = existing.chunk_size == chunk_size
         if settings.direct_upload_assembly:
@@ -425,6 +432,18 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
 async def upload_status(upload_id: str):
     missing = upload_store.missing_chunks(upload_id)
     return ORJSONResponse({"missing": missing})
+
+
+@app.delete("/api/upload/{upload_id}")
+async def cancel_upload(upload_id: str):
+    try:
+        upload_store.get_meta(upload_id)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return ORJSONResponse({"ok": True, "removed": False})
+        raise
+    upload_store.remove_session(upload_id)
+    return ORJSONResponse({"ok": True, "removed": True})
 
 
 async def upload_stream(request: Request):
