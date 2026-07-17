@@ -15,6 +15,7 @@ const WAKE_REQUEST_TIMEOUT_MS = 2500;
 
 const els = {
   themeBtn: $('theme-toggle'),
+  themeIcon: $('theme-icon'),
   wakeToggle: $('wake-toggle'),
   wakeStatus: $('wake-status'),
   securityBadge: $('security-badge'),
@@ -44,6 +45,7 @@ const els = {
   downloadsPathStatus: $('downloads-path-status'),
   downloadsFree: $('downloads-free'),
   computerName: $('computer-name'),
+  computerNameHeading: $('computer-name-heading'),
   btnChooseDownloads: $('btn-choose-downloads'),
   inputOutbox: $('input-outbox'),
   btnSendToIphone: $('btn-send-to-iphone'),
@@ -130,7 +132,11 @@ applyTheme(themeMode);
 if (els.themeBtn) {
   const renderTheme = () => {
     const label = themeMode === 'auto' ? '主题：跟随系统' : themeMode === 'light' ? '主题：浅色' : '主题：深色';
-    els.themeBtn.textContent = themeMode === 'dark' ? '☾' : themeMode === 'light' ? '☼' : '◐';
+    if (els.themeIcon) {
+      els.themeIcon.src = themeMode === 'light'
+        ? '/static/icons/tabler/sun.svg'
+        : '/static/icons/tabler/moon.svg';
+    }
     els.themeBtn.title = label;
     els.themeBtn.setAttribute('aria-label', `${label}，点击切换`);
   };
@@ -302,7 +308,8 @@ function renderEnvironmentStatus() {
   document.documentElement.classList.toggle('standalone-mode', standalone);
 
   if (els.securityBadge) {
-    els.securityBadge.textContent = secure ? 'HTTPS 安全连接' : 'HTTP 降级模式';
+    const label = els.securityBadge.querySelector('strong') || els.securityBadge;
+    label.textContent = secure ? 'HTTPS 加密连接' : '本地连接 · 未加密';
     els.securityBadge.classList.toggle('warning', !secure);
   }
   if (els.appModeBadge) {
@@ -653,8 +660,10 @@ function renderRuntimeConfig() {
       : '可用空间暂时无法读取';
   }
   if (els.computerName) {
-    els.computerName.textContent = 'Home PC';
+    const displayName = runtimeConfig.computerName || 'Home PC';
+    els.computerName.textContent = displayName;
     els.computerName.title = runtimeConfig.computerName || '运行 CrossSync 的电脑';
+    if (els.computerNameHeading) els.computerNameHeading.textContent = displayName;
   }
   if (els.btnChooseDownloads) {
     els.btnChooseDownloads.hidden = !runtimeConfig.configError && !runtimeConfig.canChooseDownloadsDir;
@@ -1353,6 +1362,16 @@ function checksumLabel(file) {
   return file.checksum_source === 'sidecar' ? '旧校验值' : '有校验值';
 }
 
+function fileIconPath(path) {
+  const extension = basename(path).split('.').pop()?.toLowerCase() || '';
+  if (['jpg', 'jpeg', 'png', 'heic', 'heif', 'gif', 'webp', 'tif', 'tiff'].includes(extension)) {
+    return '/static/icons/tabler/photo.svg';
+  }
+  if (extension === 'pdf') return '/static/icons/tabler/file-type-pdf.svg';
+  if (['zip', '7z', 'rar', 'tar', 'gz'].includes(extension)) return '/static/icons/tabler/archive.svg';
+  return '/static/icons/tabler/file.svg';
+}
+
 function setVerifyStatus(file, statusEl, text, tone = '') {
   file.verifyStatusText = text;
   file.verifyStatusTone = tone;
@@ -1429,6 +1448,7 @@ function renderArea(area) {
     const item = h('div', { class: 'file-item', dataset: { path: file.path } },
       h('div', { class: 'file-row' },
         checkbox,
+        h('img', { class: 'file-type-icon', src: fileIconPath(file.path), alt: '' }),
         h('div', { class: 'file-main' }, link, meta, verifyStatus),
         h('div', { class: 'file-actions' }, verify, download)
       )
@@ -1563,6 +1583,18 @@ els.btnChooseDownloads?.addEventListener('click', async () => {
 refreshRuntimeConfig().finally(() => {
   refreshArea('downloads');
   refreshArea('outbox');
+});
+
+$('nav-to-computer')?.addEventListener('click', () => {
+  setDirection('downloads');
+  els.dzUpload?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  els.dzUpload?.focus({ preventScroll: true });
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !els.utilityDrawer?.open) return;
+  els.utilityDrawer.open = false;
+  els.btnSettings?.focus();
 });
 initPwa();
 setInterval(() => {
