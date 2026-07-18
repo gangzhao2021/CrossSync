@@ -3145,6 +3145,38 @@ body.transfer-workspace-body [role="button"]:focus-visible {
   color: var(--ws-muted);
 }
 
+.statusbar-back {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  padding: 0 11px;
+  border: 1px solid var(--ws-line);
+  border-radius: 10px;
+  color: var(--ws-muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.statusbar-back:hover {
+  border-color: rgba(66, 141, 255, 0.58);
+  background: var(--ws-surface-hover);
+  color: var(--ws-text);
+}
+
+.statusbar-back img {
+  width: 19px;
+  height: 19px;
+  filter: brightness(0) invert(84%) sepia(8%) saturate(640%) hue-rotate(180deg) brightness(91%);
+}
+
+.mobile-scan-label {
+  display: none;
+}
+
 .statusbar-item {
   display: inline-flex;
   align-items: center;
@@ -3961,6 +3993,21 @@ body.transfer-workspace-body .task-meta {
     justify-content: center;
     gap: 10px;
     padding: 0 12px;
+  }
+
+  .statusbar-back {
+    width: auto;
+    min-width: 60px;
+    padding: 0 9px;
+    justify-content: center;
+  }
+
+  .statusbar-back .desktop-scan-label {
+    display: none;
+  }
+
+  .statusbar-back .mobile-scan-label {
+    display: inline;
   }
 
   .statusbar-item {
