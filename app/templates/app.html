@@ -12,12 +12,12 @@
   <link rel="icon" href="/favicon.ico" />
   <link rel="apple-touch-icon" href="/static/app-icon-180.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260717-recovery2" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260718-scanback1" />
 </head>
 <body class="transfer-workspace-body">
   <div class="transfer-shell">
     <aside class="workspace-sidebar" aria-label="CrossSync 导航">
-      <a class="workspace-brand" href="/app" aria-label="CrossSync 首页">
+      <a class="workspace-brand" href="/" aria-label="返回扫码界面" title="返回扫码界面">
         <img src="/static/app-icon-192.png" alt="" />
         <strong>CrossSync</strong>
       </a>
@@ -47,6 +47,11 @@
 
     <div class="workspace-main">
       <header class="workspace-statusbar">
+        <a class="statusbar-back" href="/" aria-label="返回扫码界面" title="返回扫码界面">
+          <img src="/static/icons/tabler/home.svg" alt="" />
+          <span class="desktop-scan-label">返回扫码页</span>
+          <span class="mobile-scan-label">扫码</span>
+        </a>
         <div class="statusbar-item connected" role="status">
           <img src="/static/icons/tabler/device-desktop.svg" alt="" />
           <strong><span id="computer-name">Home PC</span> 已连接</strong>
