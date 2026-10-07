@@ -110,3 +110,12 @@ node --test tests/file-list-refresh.test.cjs
 ```
 
 The iOS test target includes a chunk-range and SHA-256 regression test; run it in Xcode on macOS.
+
+## Repository Layout
+
+- `app/` - FastAPI server: `main.py` (HTTP routes), `uploader.py` (chunked upload sessions), `checksums.py`, `config.py`, `utils.py`, plus `static/` and `templates/` for the web UI.
+- `ios/` - native SwiftUI client; `project.yml` generates the Xcode project with XcodeGen.
+- `scripts/` - HTTPS certificate setup for Windows and POSIX, and the app icon generator.
+- `tests/` - Python `unittest` suites and the Node test for the browser list controller.
+- `run.ps1` / `run.sh` - one-command launchers that create `.venv`, install requirements, and start uvicorn.
+- `data/` and `certs/` are created at runtime and are not committed.

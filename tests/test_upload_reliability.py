@@ -160,7 +160,7 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 f.write(b"partial")
             self.assertEqual(list(main.iter_files_within(self.destination)), [])
             with self.assertRaises(HTTPException) as caught:
-                await main.download_downloads(name)
+                await main.download_area_file("downloads", name)
             self.assertEqual(caught.exception.status_code, 404)
         await main.api_delete({"area": "downloads", "clear": True})
         self.assertEqual(len(os.listdir(self.destination)), 2)

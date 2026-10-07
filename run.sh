@@ -4,8 +4,6 @@ set -euo pipefail
 PORT=8008
 HTTPS=0
 REGENERATE_CERTIFICATE=0
-ENABLE_OTP=0
-OTP_CODE=""
 ACCESS_TOKEN=""
 LAN_HOST=""
 
@@ -23,15 +21,6 @@ while [[ $# -gt 0 ]]; do
       HTTPS=1
       REGENERATE_CERTIFICATE=1
       shift
-      ;;
-    --otp)
-      ENABLE_OTP=1
-      shift
-      ;;
-    --otp-code)
-      ENABLE_OTP=1
-      OTP_CODE="${2:?missing otp code}"
-      shift 2
       ;;
     --access-token)
       ACCESS_TOKEN="${2:?missing access token}"
@@ -61,12 +50,6 @@ fi
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 
-if [[ "$ENABLE_OTP" == "1" ]]; then
-  export CROSSSYNC_ENABLE_OTP=1
-fi
-if [[ -n "$OTP_CODE" ]]; then
-  export CROSSSYNC_ACCESS_TOKEN="$OTP_CODE"
-fi
 if [[ -n "$ACCESS_TOKEN" ]]; then
   export CROSSSYNC_ACCESS_TOKEN="$ACCESS_TOKEN"
 fi

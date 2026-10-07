@@ -1,28 +1,28 @@
-import os
+import asyncio
+import hashlib
 import io
+import ipaddress
+import os
+import re
+import secrets
+import shutil
+import socket
+import tempfile
+import threading
 import time
 import uuid
-import asyncio
-import shutil
-import ipaddress
-import socket
-import secrets
-import threading
-import re
-from contextlib import asynccontextmanager
-from typing import List, Optional, Dict
-
-from fastapi import FastAPI, Request, HTTPException
-from fastapi import Body
-from fastapi.responses import HTMLResponse, FileResponse, ORJSONResponse, RedirectResponse, StreamingResponse
-from starlette.background import BackgroundTask
-import tempfile
 import zipfile
+from contextlib import asynccontextmanager
+from typing import Dict, Optional
 from urllib.parse import urlencode
+
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, ORJSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
 
-from .config import settings, ensure_dirs, load_env_overrides, set_downloads_dir
+from .config import area_dir, ensure_dirs, load_env_overrides, set_downloads_dir, settings
 from .utils import (
     file_fingerprint,
     folder_picker_available,
@@ -51,17 +51,54 @@ from .checksums import (
 
 load_env_overrides()
 ensure_dirs()
-app = FastAPI(title=settings.app_name)
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
-
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 upload_store = UploadStore(os.path.join(settings.temp_dir, "uploads"))
 upload_slots = asyncio.Semaphore(settings.max_server_uploads)
 capacity_lock = threading.RLock()
 stream_reservations: Dict[str, tuple] = {}
+# Partially assembled outputs that must never be listed, downloaded or cleared.
+PARTIAL_OUTPUT_RE = re.compile(r"\.(?:assembling|streaming)-[a-zA-Z0-9-]+\.tmp$")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    async def cleanup_loop():
+        while True:
+            try:
+                await run_io(upload_store.cleanup_expired)
+            except Exception:
+                pass
+            await asyncio.sleep(3600)
+
+    cleanup_task = asyncio.create_task(cleanup_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+def resolve_area(area: str) -> str:
+    """Map a transfer area from a URL to its directory, or answer 404."""
+    try:
+        return area_dir(area)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="unknown area")
+
+
+def discard_files(*paths: str) -> None:
+    """Best-effort removal of temporary files."""
+    for path in paths:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 async def run_io(function, *args, **kwargs):
@@ -126,8 +163,7 @@ def check_upload_capacity(size, target_dir, chunk_size=0, *, stream=False):
             if exc.status_code == 404:
                 continue
             raise
-        destination = meta.target_dir or (settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir)
-        reserve(meta.size, destination, meta.chunk_size, False)
+        reserve(meta.size, meta.destination_dir(), meta.chunk_size, False)
     for file_size, destination in stream_reservations.values():
         reserve(file_size, destination, 0, True)
     reserve(size, target_dir, chunk_size, stream)
@@ -234,7 +270,6 @@ async def ca_certificate():
 async def qr_png(request: Request):
     try:
         import qrcode
-        from PIL import Image
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"QR deps missing: {e}")
     sid = request.query_params.get('sid')
@@ -333,15 +368,6 @@ def api_pick_downloads_dir(request: Request):
     })
 
 
-class InitUploadBody:
-    def __init__(self, name: str, size: int, chunk_size: Optional[int] = None, last_modified: Optional[int] = None, target: str = "downloads"):
-        self.name = name
-        self.size = size
-        self.chunk_size = chunk_size or settings.default_chunk_size
-        self.last_modified = last_modified
-        self.target = target
-
-
 @app.post("/api/init-upload")
 async def init_upload(payload: dict = Body(...)):
     return await run_io(initialize_upload, payload)
@@ -392,7 +418,7 @@ def _initialize_upload(payload):
 
     if len(upload_store.active_sessions()) >= settings.max_active_uploads:
         raise HTTPException(status_code=503, detail="too many active uploads")
-    target_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
+    target_dir = area_dir(target)
     check_upload_capacity(size, target_dir, chunk_size)
 
     upload_id = uuid.uuid4().hex
@@ -469,10 +495,7 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
         expected = meta.size - meta.chunk_size * (meta.total_chunks - 1)
 
     hdr = request.headers.get('x-sha256')
-    sha256 = None
-    if hdr:
-        import hashlib
-        sha256 = hashlib.sha256()
+    sha256 = hashlib.sha256() if hdr else None
 
     temp_path = upload_store.chunk_temp_path(upload_id, chunk_index)
     total = 0
@@ -487,38 +510,16 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
                 if sha256:
                     sha256.update(block)
                 await run_io(f.write, block)
-    except asyncio.CancelledError:
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
-        raise
-    except HTTPException:
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
+        if sha256 and sha256.hexdigest().lower() != hdr.lower():
+            raise HTTPException(status_code=400, detail="chunk checksum mismatch")
+        if total != expected:
+            raise HTTPException(status_code=400, detail=f"chunk size mismatch {total} != {expected}")
+    except (asyncio.CancelledError, HTTPException):
+        discard_files(temp_path)
         raise
     except Exception as exc:
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
+        discard_files(temp_path)
         raise HTTPException(status_code=499, detail=f"upload interrupted: {exc}")
-
-    if sha256 and sha256.hexdigest().lower() != hdr.lower():
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail="chunk checksum mismatch")
-
-    if total != expected:
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail=f"chunk size mismatch {total} != {expected}")
 
     try:
         await run_io(
@@ -531,10 +532,7 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
             direct=settings.direct_upload_assembly,
         )
     finally:
-        try:
-            os.remove(temp_path)
-        except FileNotFoundError:
-            pass
+        discard_files(temp_path)
     return ORJSONResponse({"ok": True, "idx": chunk_index})
 
 
@@ -608,7 +606,7 @@ async def _upload_stream(request: Request, reservation_id: str):
     if checksum_flag is not None:
         compute_checksum = checksum_flag not in {"0", "false", "False", "no", "off"}
 
-    target_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
+    target_dir = area_dir(target)
     await run_io(reserve_stream_capacity, reservation_id, expected_size, target_dir)
     try:
         rel = sanitize_rel_path(name)
@@ -620,10 +618,7 @@ async def _upload_stream(request: Request, reservation_id: str):
     temp_path = os.path.join(stream_dir, f"{uuid.uuid4().hex}.uploading")
     final_temp_path = f"{final_path}.streaming-{uuid.uuid4().hex}.tmp"
 
-    sha256 = None
-    if compute_checksum:
-        import hashlib
-        sha256 = hashlib.sha256()
+    sha256 = hashlib.sha256() if compute_checksum else None
 
     total = 0
     try:
@@ -641,33 +636,16 @@ async def _upload_stream(request: Request, reservation_id: str):
             raise HTTPException(status_code=400, detail=f"stream size mismatch {total} != {expected_size}")
 
         await run_io(publish_stream, temp_path, final_temp_path, final_path)
-    except asyncio.CancelledError:
-        for path in (temp_path, final_temp_path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
-        release_reserved_path(final_path)
-        raise
-    except HTTPException:
-        for path in (temp_path, final_temp_path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
+    except (asyncio.CancelledError, HTTPException):
+        discard_files(temp_path, final_temp_path)
         release_reserved_path(final_path)
         raise
     except Exception as exc:
-        for path in (temp_path, final_temp_path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
+        discard_files(temp_path, final_temp_path)
         release_reserved_path(final_path)
         raise HTTPException(status_code=499, detail=f"stream upload interrupted: {exc}")
 
-    base_dir = target_dir
-    rel_path = normalize_rel_path(os.path.relpath(final_path, base_dir))
+    rel_path = normalize_rel_path(os.path.relpath(final_path, target_dir))
     sha = sha256.hexdigest() if sha256 else None
     checksum_info = None
     if sha:
@@ -713,8 +691,7 @@ async def _finish_upload(upload_id: str, request: Request):
         final_path, sha = result.split("|sha256:", 1)
     else:
         final_path, sha = result, None
-    base_dir = meta.target_dir or (settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir)
-    rel_path = normalize_rel_path(os.path.relpath(final_path, base_dir))
+    rel_path = normalize_rel_path(os.path.relpath(final_path, meta.destination_dir()))
     checksum_info = None
     if sha:
         try:
@@ -751,7 +728,7 @@ def is_hidden_transfer_file(rel_path: str) -> bool:
     name = parts[-1] if parts else rel
     return (
         ".crosssync" in [part.lower() for part in parts]
-        or bool(re.search(r"\.(?:assembling|streaming)-[a-zA-Z0-9-]+\.tmp$", name))
+        or bool(PARTIAL_OUTPUT_RE.search(name))
         or name.endswith(".sha256")
         or name in {".DS_Store", "Thumbs.db"}
     )
@@ -801,15 +778,10 @@ def create_zip_archive(files, prefix: str) -> str:
         raise
 
 
-@app.get("/api/list/downloads")
-async def list_downloads():
-    files = await asyncio.to_thread(lambda: list(iter_files_within(settings.downloads_dir, "downloads")))
-    return ORJSONResponse({"files": files})
-
-
-@app.get("/api/list/outbox")
-async def list_outbox():
-    files = await asyncio.to_thread(lambda: list(iter_files_within(settings.outbox_dir, "outbox")))
+@app.get("/api/list/{area}")
+async def list_area(area: str):
+    base = resolve_area(area)
+    files = await asyncio.to_thread(lambda: list(iter_files_within(base, area)))
     return ORJSONResponse({"files": files})
 
 
@@ -821,7 +793,7 @@ async def api_verify(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="invalid payload")
     if is_hidden_transfer_file(path):
         raise HTTPException(status_code=404, detail="not found")
-    base = settings.downloads_dir if area == "downloads" else settings.outbox_dir
+    base = area_dir(area)
     try:
         full = safe_join(base, path)
     except ValueError:
@@ -832,18 +804,12 @@ async def api_verify(payload: dict = Body(...)):
     return ORJSONResponse(result)
 
 
-@app.post("/api/open/downloads")
-async def open_downloads_folder(request: Request):
+@app.post("/api/open/{area}")
+async def open_area_folder(area: str, request: Request):
+    base = resolve_area(area)
     if not is_host_request(request):
         raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上打开目录")
-    return ORJSONResponse({"ok": open_folder(settings.downloads_dir)})
-
-
-@app.post("/api/open/outbox")
-async def open_outbox_folder(request: Request):
-    if not is_host_request(request):
-        raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上打开目录")
-    return ORJSONResponse({"ok": open_folder(settings.outbox_dir)})
+    return ORJSONResponse({"ok": open_folder(base)})
 
 
 @app.get("/healthz")
@@ -851,80 +817,44 @@ async def healthz():
     return ORJSONResponse({"ok": True})
 
 
-@app.get("/dl/outbox/{path:path}")
-async def download_outbox(path: str):
-    if is_hidden_transfer_file(path):
-        raise HTTPException(status_code=404, detail="not found")
-    try:
-        full = safe_join(settings.outbox_dir, path)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="bad path")
-    if not os.path.isfile(full):
-        raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(full, filename=os.path.basename(full))
-
-
-@app.get("/dl/outbox.zip")
-async def download_outbox_zip(request: Request):
-    # Accept repeated query param 'paths' to include specific files; otherwise include all
-    paths = request.query_params.getlist("paths") if hasattr(request.query_params, 'getlist') else []
+@app.get("/dl/{area}.zip")
+async def download_area_zip(area: str, request: Request):
+    base = resolve_area(area)
+    # Repeated 'paths' query params select specific files; otherwise include all.
+    paths = request.query_params.getlist("paths")
     files = []
     if paths:
         for p in paths:
             if is_hidden_transfer_file(p):
                 continue
             try:
-                full = safe_join(settings.outbox_dir, p)
+                full = safe_join(base, p)
             except ValueError:
                 continue
             if os.path.isfile(full):
-                files.append((full, normalize_rel_path(os.path.relpath(full, settings.outbox_dir))))
+                files.append((full, normalize_rel_path(os.path.relpath(full, base))))
     else:
-        listed = await asyncio.to_thread(lambda: list(iter_files_within(settings.outbox_dir, "outbox")))
-        files = [(os.path.join(settings.outbox_dir, f["path"].replace("/", os.sep)), f["path"]) for f in listed]
+        listed = await asyncio.to_thread(lambda: list(iter_files_within(base, area)))
+        files = [(os.path.join(base, f["path"].replace("/", os.sep)), f["path"]) for f in listed]
     if not files:
         raise HTTPException(status_code=404, detail="no files")
-
-    tmp_zip = await asyncio.to_thread(create_zip_archive, files, "outbox_")
-    filename = f"outbox-{int(time.time())}.zip"
+    tmp_zip = await asyncio.to_thread(create_zip_archive, files, f"{area}_")
+    filename = f"{area}-{int(time.time())}.zip"
     return FileResponse(tmp_zip, filename=filename, media_type="application/zip", background=BackgroundTask(lambda: os.remove(tmp_zip)))
 
 
-@app.get("/dl/downloads/{path:path}")
-async def download_downloads(path: str):
+@app.get("/dl/{area}/{path:path}")
+async def download_area_file(area: str, path: str):
+    base = resolve_area(area)
     if is_hidden_transfer_file(path):
         raise HTTPException(status_code=404, detail="not found")
     try:
-        full = safe_join(settings.downloads_dir, path)
+        full = safe_join(base, path)
     except ValueError:
         raise HTTPException(status_code=403, detail="bad path")
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(full, filename=os.path.basename(full))
-
-
-@app.get("/dl/downloads.zip")
-async def download_downloads_zip(request: Request):
-    paths = request.query_params.getlist("paths") if hasattr(request.query_params, 'getlist') else []
-    files = []
-    if paths:
-        for p in paths:
-            if is_hidden_transfer_file(p):
-                continue
-            try:
-                full = safe_join(settings.downloads_dir, p)
-            except ValueError:
-                continue
-            if os.path.isfile(full):
-                files.append((full, normalize_rel_path(os.path.relpath(full, settings.downloads_dir))))
-    else:
-        listed = await asyncio.to_thread(lambda: list(iter_files_within(settings.downloads_dir, "downloads")))
-        files = [(os.path.join(settings.downloads_dir, f["path"].replace("/", os.sep)), f["path"]) for f in listed]
-    if not files:
-        raise HTTPException(status_code=404, detail="no files")
-    tmp_zip = await asyncio.to_thread(create_zip_archive, files, "downloads_")
-    filename = f"downloads-{int(time.time())}.zip"
-    return FileResponse(tmp_zip, filename=filename, media_type="application/zip", background=BackgroundTask(lambda: os.remove(tmp_zip)))
 
 
 @app.post("/api/delete")
@@ -936,7 +866,7 @@ async def api_delete(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="invalid area")
     if not clear and not isinstance(paths, list):
         raise HTTPException(status_code=400, detail="paths are required")
-    base = settings.downloads_dir if area == "downloads" else settings.outbox_dir
+    base = area_dir(area)
     def _remove_empty_dirs(root: str):
         for r, dnames, fnames in os.walk(root, topdown=False):
             if not dnames and not fnames and r != root:
@@ -960,7 +890,7 @@ async def api_delete(payload: dict = Body(...)):
             except Exception:
                 pass
             for name in files:
-                if re.search(r"\.(?:assembling|streaming)-[a-zA-Z0-9-]+\.tmp$", name):
+                if PARTIAL_OUTPUT_RE.search(name):
                     continue
                 _remove_file(os.path.join(root, name))
         delete_checksums(area)
@@ -1017,18 +947,3 @@ async def api_scanned(sid: Optional[str] = None):
         await q.put("scanned")
         sse_clients.pop(sid, None)
     return ORJSONResponse({"ok": True})
-
-
-@app.on_event("startup")
-async def on_startup():
-    # Schedule periodic cleanup of temp uploads
-    import asyncio
-    async def cleanup_loop():
-        while True:
-            try:
-                await run_io(upload_store.cleanup_expired)
-            except Exception:
-                pass
-            await asyncio.sleep(3600)
-    import asyncio
-    asyncio.create_task(cleanup_loop())

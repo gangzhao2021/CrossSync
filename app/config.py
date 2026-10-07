@@ -6,19 +6,22 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+_BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+_DATA_DIR = os.path.join(_BASE_DIR, "data")
+
+
 @dataclass
 class Settings:
     app_name: str = "CrossSync"
-    host: str = "0.0.0.0"
     port: int = 8008
 
     # Directories
-    base_dir: str = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    data_dir: str = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)), "data")
-    downloads_dir: str = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)), "data", "downloads")
-    outbox_dir: str = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)), "data", "outbox")
-    temp_dir: str = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)), "data", "temp")
-    metadata_dir: str = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)), "data", ".crosssync")
+    base_dir: str = _BASE_DIR
+    data_dir: str = _DATA_DIR
+    downloads_dir: str = os.path.join(_DATA_DIR, "downloads")
+    outbox_dir: str = os.path.join(_DATA_DIR, "outbox")
+    temp_dir: str = os.path.join(_DATA_DIR, "temp")
+    metadata_dir: str = os.path.join(_DATA_DIR, ".crosssync")
 
     # Upload behavior
     default_chunk_size: int = 8 * 1024 * 1024  # 8 MB
@@ -37,7 +40,6 @@ class Settings:
     temp_ttl_seconds: int = 60 * 60 * 48  # 48 hours
 
     # Preferences
-    open_on_finish_default: bool = False
     write_sha256_sidecar: bool = False
 
     # LAN access control. A persistent 12-digit token is generated on first run.
@@ -45,6 +47,15 @@ class Settings:
 
 
 settings = Settings()
+
+
+def area_dir(area: str) -> str:
+    """Return the directory that backs a transfer area ("downloads" or "outbox")."""
+    if area == "downloads":
+        return settings.downloads_dir
+    if area == "outbox":
+        return settings.outbox_dir
+    raise ValueError(f"unknown transfer area: {area}")
 
 
 def _preferences_path() -> str:
@@ -101,7 +112,7 @@ def _env_truthy(v: Optional[str]) -> bool:
 
 
 def load_env_overrides():
-    configured_token = (os.getenv("CROSSSYNC_ACCESS_TOKEN") or os.getenv("CROSSSYNC_OTP_CODE") or "").strip()
+    configured_token = (os.getenv("CROSSSYNC_ACCESS_TOKEN") or "").strip()
     preferences = _read_preferences()
     saved_token = preferences.get("access_token")
     if configured_token:

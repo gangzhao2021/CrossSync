@@ -1,5 +1,6 @@
-import os
+import hashlib
 import json
+import os
 import shutil
 import threading
 import unicodedata
@@ -10,7 +11,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from fastapi import HTTPException
 
-from .config import settings
+from .config import area_dir, settings
 from .utils import safe_join
 
 
@@ -42,6 +43,9 @@ class UploadMeta:
     total_chunks: int
     received: Dict[str, int]  # chunk_index -> size (string keys for JSON)
     target_dir: Optional[str] = None
+
+    def destination_dir(self) -> str:
+        return self.target_dir or area_dir(self.target)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -230,16 +234,6 @@ class UploadStore:
             os.replace(temp, path)
             self._index_meta(meta)
 
-    def write_chunk(self, upload_id: str, idx: int, data: bytes, expected_size: Optional[int] = None):
-        sd = self.session_dir(upload_id)
-        if not os.path.isdir(sd):
-            raise HTTPException(status_code=404, detail="upload not found")
-        cp = self.chunk_path(upload_id, idx)
-        with open(cp, "wb") as f:
-            f.write(data)
-        if expected_size is not None and os.path.getsize(cp) != expected_size:
-            raise HTTPException(status_code=400, detail="chunk size mismatch")
-
     def chunk_temp_path(self, upload_id: str, idx: int) -> str:
         return os.path.join(self.session_dir(upload_id), f"{idx:08d}.{uuid.uuid4().hex}.uploading")
 
@@ -300,7 +294,7 @@ class UploadStore:
                 raise HTTPException(status_code=410, detail="completed file is no longer available")
             self.touch(upload_id)
             return completed
-        target_dir = meta.target_dir or (settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir)
+        target_dir = meta.destination_dir()
         os.makedirs(target_dir, exist_ok=True)
         chunk_paths = []
         for idx in range(meta.total_chunks):
@@ -345,8 +339,6 @@ class UploadStore:
         *,
         compute_sha256: bool,
     ) -> str:
-
-        import hashlib
         sha = None
         payload_path = self.payload_path(upload_id)
         if settings.direct_upload_assembly and not os.path.isfile(payload_path):
@@ -426,39 +418,6 @@ class UploadStore:
             if not os.path.isfile(self.chunk_path(upload_id, idx)):
                 missing.append(idx)
         return missing
-
-
-def unique_path(path: str) -> str:
-    if not os.path.exists(path):
-        return path
-    base, ext = os.path.splitext(path)
-    i = 1
-    while True:
-        candidate = f"{base} ({i}){ext}"
-        if not os.path.exists(candidate):
-            return candidate
-        i += 1
-
-
-def unique_path_nested(base_dir: str, rel_path: str) -> str:
-    """Return an available path without reserving it.
-
-    Callers that will write later should use reserve_unique_path_nested instead.
-    """
-    rel_path = sanitize_rel_path(rel_path)
-    full = safe_join(base_dir, rel_path)
-    parent = os.path.dirname(full)
-    os.makedirs(parent, exist_ok=True)
-    if not os.path.exists(full):
-        return full
-    name = os.path.basename(full)
-    base, ext = os.path.splitext(name)
-    i = 1
-    while True:
-        candidate = os.path.join(parent, f"{base} ({i}){ext}")
-        if not os.path.exists(candidate):
-            return candidate
-        i += 1
 
 
 def reserve_unique_path_nested(base_dir: str, rel_path: str) -> str:

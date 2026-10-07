@@ -3,8 +3,6 @@ param(
   [switch]$Https,
   [switch]$Http,
   [switch]$RegenerateCertificate,
-  [switch]$EnableOtp,
-  [string]$OtpCode,
   [string]$AccessToken,
   [string]$LanHost
 )
@@ -31,9 +29,8 @@ if (!(Test-Path $venvPython)) { Write-Error 'Virtual env python not found. Venv 
 
 & $venvPip install -r requirements.txt
 
-# Prepare environment for OTP
+# Access token and LAN host overrides
 if ($AccessToken) { $env:CROSSSYNC_ACCESS_TOKEN = $AccessToken }
-elseif ($OtpCode) { $env:CROSSSYNC_ACCESS_TOKEN = $OtpCode }
 if ($LanHost) { $env:CROSSSYNC_LAN_HOST = $LanHost }
 
 $crossSyncToken = (& $venvPython -c "from app.config import settings, load_env_overrides; load_env_overrides(); print(settings.access_token)").Trim()
