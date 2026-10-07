@@ -26,6 +26,8 @@ Thumbs.db
 ios/*.xcodeproj/
 ios/DerivedData/
 ios/**/xcuserdata/
+# Machine-specific CA, optionally copied in before building (see ios/README.md)
+ios/CrossSyncMobile/Resources/CrossSync-Local-CA.crt
 
 # Claude Code local launch config
 .claude/launch.json

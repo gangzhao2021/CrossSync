@@ -31,4 +31,14 @@
 
 Windows 无法编译或签名 iOS App，因此本仓库提供 XcodeGen 工程描述、完整 Swift 源码和纯逻辑单元测试；最终的编译、签名和真机验证需要在 Mac/Xcode 上完成。
 
-原生 App 会优先信任 iPhone 系统中当前安装的 CrossSync CA，并把构建时内置 CA 作为兼容回退。电脑执行完整证书重新生成后，需要在 iPhone 上安装并完全信任新的 `/ca.crt`，但不需要因此重新编译 App。
+原生 App 会优先信任 iPhone 系统中当前安装的 CrossSync CA。电脑执行完整证书重新生成后，需要在 iPhone 上安装并完全信任新的 `/ca.crt`，但不需要因此重新编译 App。
+
+### 可选：内置本机 CA
+
+仓库不再提交 CA 证书，因为它属于生成它的那台电脑。如果希望 App 在 iPhone 尚未信任 CA 时也能连接，可以在运行 `xcodegen generate` 之前把电脑上的 CA 复制进来：
+
+```bash
+cp ../certs/ca.crt CrossSyncMobile/Resources/CrossSync-Local-CA.crt
+```
+
+该文件已被 `.gitignore` 忽略；不放这个文件时，App 只使用系统信任的证书。
