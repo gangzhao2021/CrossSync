@@ -48,7 +48,16 @@ if [[ ! -d .venv ]]; then
 fi
 
 . .venv/bin/activate
-python -m pip install -r requirements.txt
+# Reinstall dependencies only when requirements.txt changed since the last install.
+REQUIREMENTS_HASH="$(python -c 'import hashlib; print(hashlib.sha256(open("requirements.txt", "rb").read()).hexdigest())')"
+REQUIREMENTS_STAMP=.venv/.requirements.sha256
+if [[ "$(cat "$REQUIREMENTS_STAMP" 2>/dev/null)" != "$REQUIREMENTS_HASH" ]]; then
+  echo "Installing dependencies..."
+  python -m pip install -r requirements.txt
+  echo "$REQUIREMENTS_HASH" > "$REQUIREMENTS_STAMP"
+else
+  echo "Dependencies are up to date."
+fi
 
 if [[ -n "$ACCESS_TOKEN" ]]; then
   export CROSSSYNC_ACCESS_TOKEN="$ACCESS_TOKEN"

@@ -23,11 +23,21 @@ if (!(Test-Path .venv)) {
 }
 
 $venvPython = Join-Path .venv 'Scripts/python.exe'
-$venvPip = Join-Path .venv 'Scripts/pip.exe'
 
 if (!(Test-Path $venvPython)) { Write-Error 'Virtual env python not found. Venv creation may have failed.'; exit 1 }
 
-& $venvPip install -r requirements.txt
+# Reinstall dependencies only when requirements.txt changed since the last install.
+$requirementsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'requirements.txt').Hash
+$requirementsStamp = Join-Path .venv '.requirements.sha256'
+$installedHash = if (Test-Path -LiteralPath $requirementsStamp) { (Get-Content -LiteralPath $requirementsStamp -Raw).Trim() } else { '' }
+if ($installedHash -ne $requirementsHash) {
+  Write-Host 'Installing dependencies...'
+  & $venvPython -m pip install -r requirements.txt
+  if ($LASTEXITCODE -ne 0) { Write-Error 'Dependency installation failed.'; exit 1 }
+  Set-Content -LiteralPath $requirementsStamp -Value $requirementsHash -Encoding ascii
+} else {
+  Write-Host 'Dependencies are up to date.'
+}
 
 # Access token and LAN host overrides
 if ($AccessToken) { $env:CROSSSYNC_ACCESS_TOKEN = $AccessToken }
