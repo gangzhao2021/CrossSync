@@ -9,7 +9,11 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.main import api_delete, app, cancel_upload, init_upload
+from starlette.requests import Request
+
+from app.library import api_delete
+from app.main import app
+from app.transfers import cancel_upload, init_upload
 from app.uploader import (
     UploadStore,
     release_reserved_path,
@@ -83,7 +87,7 @@ class UploadBoundaryTests(unittest.TestCase):
             }
 
             with (
-                patch("app.main.upload_store", store),
+                patch("app.transfers.upload_store", store),
                 patch.object(settings, "downloads_dir", downloads),
                 patch.object(settings, "direct_upload_assembly", True),
                 patch.object(settings, "min_chunk_size", 1),
@@ -116,7 +120,7 @@ class UploadBoundaryTests(unittest.TestCase):
             }
 
             with (
-                patch("app.main.upload_store", store),
+                patch("app.transfers.upload_store", store),
                 patch.object(settings, "downloads_dir", downloads),
                 patch.object(settings, "direct_upload_assembly", True),
                 patch.object(settings, "min_chunk_size", 1),
@@ -144,7 +148,7 @@ class UploadBoundaryTests(unittest.TestCase):
 
     def test_delete_requires_explicit_clear_flag(self):
         with self.assertRaises(HTTPException) as context:
-            asyncio.run(api_delete({"area": "downloads"}))
+            asyncio.run(api_delete(Request({"type": "http", "query_string": b"", "headers": []}), {"area": "downloads"}))
         self.assertEqual(context.exception.status_code, 400)
 
     def test_safe_join_does_not_follow_symlink_outside_root(self):

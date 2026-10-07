@@ -57,6 +57,25 @@ class UploadMeta:
         return UploadMeta(**data)
 
 
+@dataclass
+class AssemblyResult:
+    """Where a completed upload was saved, persisted as the session receipt."""
+
+    path: str
+    sha256: Optional[str] = None
+
+    def is_intact(self, expected_size: int) -> bool:
+        return os.path.isfile(self.path) and os.path.getsize(self.path) == expected_size
+
+    @staticmethod
+    def from_receipt(data: dict) -> "AssemblyResult":
+        if "path" in data:
+            return AssemblyResult(path=data["path"], sha256=data.get("sha256"))
+        # Receipts written before this format stored "path|sha256:<hex>".
+        path, _, sha = str(data["result"]).partition("|sha256:")
+        return AssemblyResult(path=path, sha256=sha or None)
+
+
 class UploadStore:
     def __init__(self, base_dir: str):
         self.base_dir = base_dir
@@ -125,10 +144,10 @@ class UploadStore:
     def touch(self, upload_id: str) -> None:
         os.utime(self.meta_path(upload_id), None)
 
-    def completion(self, upload_id: str) -> Optional[str]:
+    def completion(self, upload_id: str) -> Optional["AssemblyResult"]:
         try:
             with open(os.path.join(self.session_dir(upload_id), "completed.json"), encoding="utf-8") as f:
-                return json.load(f)["result"]
+                return AssemblyResult.from_receipt(json.load(f))
         except FileNotFoundError:
             return None
 
@@ -282,15 +301,14 @@ class UploadStore:
         return UploadMeta.from_file(mp)
 
     @session_locked
-    def assemble(self, upload_id: str, compute_sha256: bool = True) -> str:
+    def assemble(self, upload_id: str, compute_sha256: bool = True) -> "AssemblyResult":
         meta = self.get_meta(upload_id)
         with self._activity_lock:
             if upload_id in self._cancelled:
                 raise HTTPException(status_code=409, detail="upload cancelled")
         completed = self.completion(upload_id)
         if completed:
-            final_path = completed.split("|sha256:", 1)[0]
-            if not os.path.isfile(final_path) or os.path.getsize(final_path) != meta.size:
+            if not completed.is_intact(meta.size):
                 raise HTTPException(status_code=410, detail="completed file is no longer available")
             self.touch(upload_id)
             return completed
@@ -305,16 +323,17 @@ class UploadStore:
 
         final_path = reserve_unique_path_nested(target_dir, meta.name)
         try:
-            result = self._assemble_to_path(
+            sha = self._assemble_to_path(
                 upload_id,
                 meta,
                 chunk_paths,
                 final_path,
                 compute_sha256=compute_sha256,
             )
+            result = AssemblyResult(path=final_path, sha256=sha)
             receipt = os.path.join(self.session_dir(upload_id), "completed.json")
             with open(receipt + ".tmp", "w", encoding="utf-8") as f:
-                json.dump({"result": result}, f)
+                json.dump(asdict(result), f)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(receipt + ".tmp", receipt)
@@ -338,7 +357,8 @@ class UploadStore:
         final_path: str,
         *,
         compute_sha256: bool,
-    ) -> str:
+    ) -> Optional[str]:
+        """Move or copy the payload to final_path and return its SHA-256 if requested."""
         sha = None
         payload_path = self.payload_path(upload_id)
         if settings.direct_upload_assembly and not os.path.isfile(payload_path):
@@ -375,7 +395,7 @@ class UploadStore:
                 except Exception:
                     pass
                 raise
-            return final_path + (f"|sha256:{sha}" if sha else "")
+            return sha
 
         sha256 = hashlib.sha256() if compute_sha256 else None
         temp_path = f"{final_path}.assembling-{upload_id}.tmp"
@@ -406,7 +426,7 @@ class UploadStore:
                 pass
             raise
 
-        return final_path + (f"|sha256:{sha}" if sha else "")
+        return sha
 
     @session_locked
     def missing_chunks(self, upload_id: str) -> List[int]:

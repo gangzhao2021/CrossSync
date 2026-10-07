@@ -317,24 +317,35 @@ async function loadArea(area) {
 async function deleteFiles(area, paths) {
   if (!paths.length) return;
   const label = area === 'downloads' ? '电脑接收区' : 'iPhone 共享箱';
-  if (!confirm(`确定删除 ${label} 中选中的 ${paths.length} 个文件吗？`)) return;
-  await fetchJson('/api/delete', {
+  if (!confirm(`将 ${label} 中选中的 ${paths.length} 个文件移到电脑的回收站？`)) return;
+  const result = await fetchJson('/api/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ area, paths }),
   });
+  reportDeleteFailures(result);
   await refreshArea(area);
 }
 
 async function clearArea(area) {
   const label = area === 'downloads' ? '电脑接收区' : 'iPhone 共享箱';
-  if (!confirm(`确定清空${label}吗？此操作不可撤销。`)) return;
-  await fetchJson('/api/delete', {
+  const message = `将${label}中由 CrossSync 传入、之后未被修改的文件移到回收站？\n文件夹里原有的其他文件不会受影响。`;
+  if (!confirm(message)) return;
+  const result = await fetchJson('/api/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ area, clear: true }),
   });
+  reportDeleteFailures(result);
   await refreshArea(area);
+}
+
+function reportDeleteFailures(result) {
+  const failed = result?.failed || [];
+  if (!failed.length) return;
+  const shown = failed.slice(0, 5).join('\n');
+  const more = failed.length > 5 ? `\n…另有 ${failed.length - 5} 个` : '';
+  alert(`以下文件未能移到回收站（可能正被占用），已保留原位：\n${shown}${more}`);
 }
 
 Object.entries(areaState).forEach(([area, cfg]) => {

@@ -839,6 +839,11 @@ p {
   display: none;
 }
 
+/* Clearing a folder is only offered on the computer running CrossSync. */
+html:not(.host-device) .host-only {
+  display: none;
+}
+
 .section-head {
   align-items: flex-start;
   flex-direction: column;

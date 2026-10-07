@@ -189,9 +189,9 @@
                     <button id="btn-invert-dl" class="btn small" type="button">反选</button>
                     <button id="btn-selectnone-dl" class="btn small ghost" type="button">取消选择</button>
                     <button id="btn-download-dl-selected" class="btn small" type="button" disabled>下载选中</button>
-                    <button id="btn-del-dl-selected" class="btn small danger" type="button" disabled>删除选中</button>
+                    <button id="btn-del-dl-selected" class="btn small danger" type="button" disabled>删除选中（进回收站）</button>
                     <button id="btn-download-dl-all" class="btn small" type="button" disabled>下载全部</button>
-                    <button id="btn-clear-dl" class="btn small danger" type="button" disabled>清空接收区</button>
+                    <button id="btn-clear-dl" class="btn small danger host-only" type="button" disabled title="只处理 CrossSync 传入的文件">清空已传入文件</button>
                   </div>
                 </details>
               </div>
@@ -260,7 +260,7 @@
                 <button id="btn-open-outbox" class="icon-btn" type="button" title="打开目录" aria-label="打开目录"><img src="/static/icons/tabler/folder-open.svg" alt="" /><span class="mobile-action-label">打开目录</span></button>
                 <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /><span class="mobile-action-label">刷新</span></button>
                 <button id="btn-download-ob-selected" class="btn small" type="button" disabled>下载选中</button>
-                <button id="btn-del-ob-selected" class="btn small danger" type="button" disabled>删除选中</button>
+                <button id="btn-del-ob-selected" class="btn small danger" type="button" disabled>删除选中（进回收站）</button>
                 <button id="btn-download-ob-all" class="btn small" type="button" disabled>下载全部</button>
                 <details id="more-actions-ob" class="more-actions">
                   <summary class="btn small ghost">更多</summary>
@@ -268,7 +268,7 @@
                     <button id="btn-selectall-ob" class="btn small" type="button">全选</button>
                     <button id="btn-invert-ob" class="btn small" type="button">反选</button>
                     <button id="btn-selectnone-ob" class="btn small ghost" type="button">取消选择</button>
-                    <button id="btn-clear-ob" class="btn small danger" type="button" disabled>清空</button>
+                    <button id="btn-clear-ob" class="btn small danger host-only" type="button" disabled title="只处理 CrossSync 传入的文件">清空已传入文件</button>
                   </div>
                 </details>
               </div>

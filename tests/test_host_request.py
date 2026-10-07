@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from starlette.requests import Request
 
-from app.main import api_config, api_pick_downloads_dir, is_host_address
+from app.common import is_host_address
+from app.main import api_config, api_pick_downloads_dir
 
 
 def make_request(client_host: str = "127.0.0.1") -> Request:
@@ -44,10 +45,11 @@ class HostAddressTests(unittest.TestCase):
 
 
 class RuntimeConfigTests(unittest.TestCase):
+    @patch("app.common.get_lan_ip", return_value="192.168.2.14")
     @patch("app.main.get_lan_ip", return_value="192.168.2.14")
     @patch("app.main.downloads_free_bytes", return_value=123456)
     @patch("app.main.folder_picker_available", return_value=True)
-    def test_host_config_exposes_native_folder_picker(self, _picker, _free, _lan):
+    def test_host_config_exposes_native_folder_picker(self, _picker, _free, _lan, _common_lan):
         response = asyncio.run(api_config(make_request()))
         payload = json.loads(response.body)
         self.assertTrue(payload["is_host_device"])
@@ -56,9 +58,10 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(payload["lan_ip"], "192.168.2.14")
         self.assertTrue(payload["computer_name"])
 
+    @patch("app.common.get_lan_ip", return_value="192.168.2.14")
     @patch("app.main.get_lan_ip", return_value="192.168.2.14")
     @patch("app.main.folder_picker_available", return_value=True)
-    def test_lan_client_cannot_open_computer_folder_picker(self, _picker, _lan):
+    def test_lan_client_cannot_open_computer_folder_picker(self, _picker, _lan, _common_lan):
         response = asyncio.run(api_config(make_request("192.168.2.32")))
         payload = json.loads(response.body)
         self.assertFalse(payload["is_host_device"])
