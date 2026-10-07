@@ -12,7 +12,7 @@
   <link rel="icon" href="/favicon.ico" />
   <link rel="apple-touch-icon" href="/static/app-icon-180.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260718-scanback1" />
+  <link rel="stylesheet" href="/static/styles.css?v={{ asset_version }}" />
 </head>
 <body class="transfer-workspace-body">
   <div class="transfer-shell">
@@ -293,11 +293,9 @@
     const DEFAULT_CHUNK = {{ chunk_size }};
     const MAX_CONCURRENCY = {{ max_concurrency }};
   </script>
-  <script src="/static/app.js?v=20260908-reliability"></script>
-  <script>
-    if (window.location.hash.includes("figmacapture=")) {
-      document.write('<script src="https://mcp.figma.com/mcp/html-to-design/capture.js"><\/script>');
-    }
-  </script>
+  <script src="/static/js/core.js?v={{ asset_version }}"></script>
+  <script src="/static/js/wake.js?v={{ asset_version }}"></script>
+  <script src="/static/js/upload.js?v={{ asset_version }}"></script>
+  <script src="/static/js/files.js?v={{ asset_version }}"></script>
 </body>
 </html>

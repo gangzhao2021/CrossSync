@@ -1,8 +1,11 @@
-const CACHE_NAME = 'crosssync-shell-20260908-reliability';
+const CACHE_NAME = 'crosssync-shell-__ASSET_VERSION__';
 const SHELL_ASSETS = [
   '/manifest.webmanifest',
   '/static/styles.css',
-  '/static/app.js',
+  '/static/js/core.js',
+  '/static/js/wake.js',
+  '/static/js/upload.js',
+  '/static/js/files.js',
   '/static/app-icon-180.png',
   '/static/app-icon-192.png',
   '/static/app-icon-512.png',

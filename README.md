@@ -113,9 +113,10 @@ The iOS test target includes a chunk-range and SHA-256 regression test; run it i
 
 ## Repository Layout
 
-- `app/` - FastAPI server: `main.py` (HTTP routes), `uploader.py` (chunked upload sessions), `checksums.py`, `config.py`, `utils.py`, plus `static/` and `templates/` for the web UI.
+- `app/` - FastAPI server: `main.py` (HTTP routes), `uploader.py` (chunked upload sessions), `checksums.py`, `config.py`, `utils.py`, plus `templates/` and `static/` for the web UI. The browser client lives in `static/js/` as four ordered scripts that share one global scope: `core.js` (state and helpers), `wake.js` (PWA and keep-awake), `upload.js` (upload queue) and `files.js` (file lists and bootstrap). Asset URLs carry a version computed from the static files, so caches refresh automatically.
 - `ios/` - native SwiftUI client; `project.yml` generates the Xcode project with XcodeGen.
 - `scripts/` - HTTPS certificate setup for Windows and POSIX, and the app icon generator.
 - `tests/` - Python `unittest` suites and the Node test for the browser list controller.
+- `.github/workflows/tests.yml` - runs both suites on every push to `main` and on pull requests (Ubuntu and Windows).
 - `run.ps1` / `run.sh` - one-command launchers that create `.venv`, install requirements, and start uvicorn.
 - `data/` and `certs/` are created at runtime and are not committed.

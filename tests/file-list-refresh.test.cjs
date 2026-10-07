@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 // Exercise the production list controller with a simulated API and renderer.
-const source = fs.readFileSync(path.join(__dirname, '../app/static/app.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../app/static/js/files.js'), 'utf8');
 const controller = source.slice(source.indexOf('async function refreshArea('), source.indexOf('async function deleteFiles('));
 function harness(fetchJson) {
   const state = { downloads: { files: [] } };

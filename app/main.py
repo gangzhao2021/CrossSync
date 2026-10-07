@@ -17,7 +17,7 @@ from typing import Dict, Optional
 from urllib.parse import urlencode
 
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, ORJSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
@@ -54,6 +54,22 @@ ensure_dirs()
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+
+
+def compute_asset_version() -> str:
+    """Fingerprint static assets so templates and the service worker bust caches automatically."""
+    digest = hashlib.sha256()
+    for root, dirs, names in os.walk(static_dir):
+        dirs.sort()
+        for name in sorted(names):
+            full = os.path.join(root, name)
+            stat = os.stat(full)
+            digest.update(f"{os.path.relpath(full, static_dir)}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()[:12]
+
+
+ASSET_VERSION = compute_asset_version()
+templates.env.globals["asset_version"] = ASSET_VERSION
 
 upload_store = UploadStore(os.path.join(settings.temp_dir, "uploads"))
 upload_slots = asyncio.Semaphore(settings.max_server_uploads)
@@ -219,7 +235,7 @@ async def access_gate(request: Request, call_next):
 
     await asyncio.sleep(0.15)
     if path.startswith("/api/") or path.startswith("/dl/"):
-        return ORJSONResponse({"detail": "需要 CrossSync 访问令牌"}, status_code=401)
+        return JSONResponse({"detail": "需要 CrossSync 访问令牌"}, status_code=401)
     return HTMLResponse("<h3>需要 CrossSync 访问令牌</h3><p>请从电脑端二维码重新打开。</p>", status_code=401)
 
 
@@ -229,8 +245,7 @@ async def index(request: Request):
     sid = uuid.uuid4().hex
     _, url = app_url_for_request(request, sid)
     ca_available = os.path.isfile(os.path.join(settings.base_dir, "certs", "ca.crt"))
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "lan_url": url,
         "access_token": settings.access_token,
         "sid": sid,
@@ -251,8 +266,10 @@ async def manifest():
 
 @app.get("/sw.js")
 async def service_worker():
-    return FileResponse(
-        os.path.join(static_dir, "sw.js"),
+    with open(os.path.join(static_dir, "sw.js"), encoding="utf-8") as f:
+        script = f.read().replace("__ASSET_VERSION__", ASSET_VERSION)
+    return Response(
+        script,
         media_type="application/javascript",
         headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
     )
@@ -284,7 +301,11 @@ async def qr_png(request: Request):
 @app.get("/app", response_class=HTMLResponse)
 async def app_page(request: Request):
     lan_ip = get_lan_ip()
-    return templates.TemplateResponse("app.html", {"request": request, "lan_ip": lan_ip, "chunk_size": settings.default_chunk_size, "max_concurrency": settings.max_concurrency})
+    return templates.TemplateResponse(request, "app.html", {
+        "lan_ip": lan_ip,
+        "chunk_size": settings.default_chunk_size,
+        "max_concurrency": settings.max_concurrency,
+    })
 
 
 def is_host_address(client_host: str, lan_ip: Optional[str] = None) -> bool:
@@ -321,7 +342,7 @@ def downloads_free_bytes() -> Optional[int]:
 @app.get("/api/config")
 async def api_config(request: Request):
     host_request = is_host_request(request)
-    return ORJSONResponse({
+    return JSONResponse({
         "downloads_dir": settings.downloads_dir,
         "downloads_free_bytes": downloads_free_bytes(),
         "outbox_dir": settings.outbox_dir,
@@ -350,7 +371,7 @@ def api_pick_downloads_dir(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"无法打开文件夹选择器：{exc}")
     if not selected:
-        return ORJSONResponse({
+        return JSONResponse({
             "ok": False,
             "cancelled": True,
             "downloads_dir": settings.downloads_dir,
@@ -360,7 +381,7 @@ def api_pick_downloads_dir(request: Request):
         downloads_dir = set_downloads_dir(selected, persist=True)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return ORJSONResponse({
+    return JSONResponse({
         "ok": True,
         "cancelled": False,
         "downloads_dir": downloads_dir,
@@ -434,7 +455,7 @@ def _initialize_upload(payload):
         target_dir=target_dir,
     )
     upload_store.init_session(meta)
-    return ORJSONResponse({
+    return JSONResponse({
         "resumed": False,
         "upload_id": upload_id,
         "chunk_size": chunk_size,
@@ -464,7 +485,7 @@ def resume_upload(upload_id, chunk_size):
             upload_store.remove_session(upload_id)
             return None
         upload_store.touch(upload_id)
-        return ORJSONResponse({
+        return JSONResponse({
             "resumed": True,
             "upload_id": upload_id,
             "chunk_size": existing.chunk_size,
@@ -533,13 +554,13 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
         )
     finally:
         discard_files(temp_path)
-    return ORJSONResponse({"ok": True, "idx": chunk_index})
+    return JSONResponse({"ok": True, "idx": chunk_index})
 
 
 @app.get("/api/upload/{upload_id}/status")
 async def upload_status(upload_id: str):
     missing = await run_io(upload_store.missing_chunks, upload_id)
-    return ORJSONResponse({"missing": missing})
+    return JSONResponse({"missing": missing})
 
 
 @app.delete("/api/upload/{upload_id}")
@@ -548,10 +569,10 @@ async def cancel_upload(upload_id: str):
         await run_io(upload_store.get_meta, upload_id)
     except HTTPException as exc:
         if exc.status_code == 404:
-            return ORJSONResponse({"ok": True, "removed": False})
+            return JSONResponse({"ok": True, "removed": False})
         raise
     await run_io(upload_store.remove_session, upload_id)
-    return ORJSONResponse({"ok": True, "removed": True})
+    return JSONResponse({"ok": True, "removed": True})
 
 
 def release_stream_capacity(reservation_id):
@@ -662,7 +683,7 @@ async def _upload_stream(request: Request, reservation_id: str):
             pass
 
     release_reserved_path(final_path)
-    return ORJSONResponse({
+    return JSONResponse({
         "saved": final_path,
         "path": rel_path,
         "area": target,
@@ -713,7 +734,7 @@ async def _finish_upload(upload_id: str, request: Request):
                 f.write(f"{sha}  {os.path.basename(final_path)}\n")
         except Exception:
             pass
-    return ORJSONResponse({
+    return JSONResponse({
         "saved": final_path,
         "path": rel_path,
         "area": meta.target,
@@ -782,7 +803,7 @@ def create_zip_archive(files, prefix: str) -> str:
 async def list_area(area: str):
     base = resolve_area(area)
     files = await asyncio.to_thread(lambda: list(iter_files_within(base, area)))
-    return ORJSONResponse({"files": files})
+    return JSONResponse({"files": files})
 
 
 @app.post("/api/verify")
@@ -801,7 +822,7 @@ async def api_verify(payload: dict = Body(...)):
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="not found")
     result = await asyncio.to_thread(verify_checksum, area, normalize_rel_path(path), full)
-    return ORJSONResponse(result)
+    return JSONResponse(result)
 
 
 @app.post("/api/open/{area}")
@@ -809,12 +830,12 @@ async def open_area_folder(area: str, request: Request):
     base = resolve_area(area)
     if not is_host_request(request):
         raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上打开目录")
-    return ORJSONResponse({"ok": open_folder(base)})
+    return JSONResponse({"ok": open_folder(base)})
 
 
 @app.get("/healthz")
 async def healthz():
-    return ORJSONResponse({"ok": True})
+    return JSONResponse({"ok": True})
 
 
 @app.get("/dl/{area}.zip")
@@ -895,7 +916,7 @@ async def api_delete(payload: dict = Body(...)):
                 _remove_file(os.path.join(root, name))
         delete_checksums(area)
         _remove_empty_dirs(base)
-        return ORJSONResponse({"ok": True, "cleared": True})
+        return JSONResponse({"ok": True, "cleared": True})
     else:
         deleted = 0
         removed_paths = []
@@ -913,29 +934,48 @@ async def api_delete(payload: dict = Body(...)):
         if removed_paths:
             delete_checksums(area, removed_paths)
         _remove_empty_dirs(base)
-        return ORJSONResponse({"ok": True, "deleted": deleted})
+        return JSONResponse({"ok": True, "deleted": deleted})
 
 
-# Simple SSE to notify desktop to open /app after phone scans
+# Server-sent events let the QR page open /app once the phone has scanned.
+SSE_MAX_CLIENTS = 32
+SSE_TTL_SECONDS = 10 * 60
+SSE_KEEPALIVE_SECONDS = 25
+SID_RE = re.compile(r"^[0-9a-f]{32}$")
 sse_clients: Dict[str, asyncio.Queue] = {}
 
 
 @app.get("/api/sse/{sid}")
 async def sse_endpoint(sid: str):
+    if not SID_RE.match(sid):
+        raise HTTPException(status_code=400, detail="invalid sid")
+    if sid not in sse_clients and len(sse_clients) >= SSE_MAX_CLIENTS:
+        raise HTTPException(status_code=429, detail="too many waiting QR pages")
     queue: asyncio.Queue = asyncio.Queue()
     sse_clients[sid] = queue
 
     async def event_gen():
+        deadline = time.monotonic() + SSE_TTL_SECONDS
         try:
             while True:
-                msg = await queue.get()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    # Tell the page to stop reconnecting; a reload starts a new session.
+                    yield "event: expired\ndata: expired\n\n"
+                    return
+                try:
+                    msg = await asyncio.wait_for(queue.get(), min(SSE_KEEPALIVE_SECONDS, remaining))
+                except asyncio.TimeoutError:
+                    # Comment lines keep the connection alive and reveal closed clients.
+                    yield ": keepalive\n\n"
+                    continue
                 yield f"data: {msg}\n\n"
-        except asyncio.CancelledError:
-            pass
+                return
         finally:
-            sse_clients.pop(sid, None)
+            if sse_clients.get(sid) is queue:
+                sse_clients.pop(sid, None)
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/api/scanned")
@@ -946,4 +986,4 @@ async def api_scanned(sid: Optional[str] = None):
     if q:
         await q.put("scanned")
         sse_clients.pop(sid, None)
-    return ORJSONResponse({"ok": True})
+    return JSONResponse({"ok": True})

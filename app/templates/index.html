@@ -9,7 +9,7 @@
   <link rel="icon" href="/favicon.ico" />
   <link rel="apple-touch-icon" href="/static/app-icon-180.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260709-securepwa2" />
+  <link rel="stylesheet" href="/static/styles.css?v={{ asset_version }}" />
 </head>
 <body>
   <main class="qr-shell">
@@ -47,6 +47,7 @@
     const redirectUrl = "{{ lan_url }}";
     try {
       const es = new EventSource(`/api/sse/${sid}`);
+      es.addEventListener('expired', () => es.close());
       es.onmessage = (e) => {
         if (e.data === 'scanned') {
           es.close();
