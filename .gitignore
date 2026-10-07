@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 .Python
-.venv/
+.venv*/
 venv/
 env/
 
@@ -26,3 +26,6 @@ Thumbs.db
 ios/*.xcodeproj/
 ios/DerivedData/
 ios/**/xcuserdata/
+
+# Claude Code local launch config
+.claude/launch.json
