@@ -139,3 +139,7 @@ node --test tests/file-list-refresh.test.cjs
 - `.github/`：自动测试流程和 Dependabot 配置。
 - `run.ps1` / `run.sh`：一键启动脚本，会创建 `.venv`、按需安装依赖并启动 uvicorn。
 - `data/` 和 `certs/` 在运行时生成，不会提交到仓库。
+
+## 许可证
+
+本项目以 [MIT 许可证](LICENSE) 发布。`app/static/icons/tabler/` 中的图标来自 [Tabler Icons](https://tabler.io/icons)，按其自带的 [MIT 许可证](app/static/icons/tabler/LICENSE) 使用。
