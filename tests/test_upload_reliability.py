@@ -277,6 +277,51 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
             second = await self.initialize(name="second.bin", resume_key="second", size=0)
             self.assertNotEqual(second["upload_id"], sid)
 
+    async def test_aliased_destination_reports_area_relative_paths(self):
+        # A receive folder reached through a junction, symlink or 8.3 short name
+        # must still report "sample.bin", not "../../<resolved path>/sample.bin".
+        alias = make_directory_alias(self.destination)
+        if alias is None:
+            self.skipTest("cannot create a directory alias on this system")
+        self.stack.enter_context(patch.object(settings, "downloads_dir", alias))
+
+        sid = (await self.initialize(size=4))["upload_id"]
+        await main.upload_chunk(sid, 0, ChunkRequest(b"abcd"))
+        receipt = json.loads((await main.finish_upload(sid, finish_request())).body)
+        self.assertEqual(receipt["path"], "sample.bin")
+
+        stream = ChunkRequest(b"wxyz")
+        stream.query_params = {"name": "nested/stream.bin", "size": "4", "checksum": "1"}
+        self.assertEqual(json.loads((await main.upload_stream(stream)).body)["path"], "nested/stream.bin")
+
+        captured = {}
+
+        def capture_zip(files, prefix):
+            captured["names"] = sorted(arc for _, arc in files)
+            raise RuntimeError("stop before writing the archive")
+
+        zip_request = Request({"type": "http", "query_string": b"paths=sample.bin&paths=nested/stream.bin", "headers": []})
+        with patch.object(main, "create_zip_archive", side_effect=capture_zip), self.assertRaises(RuntimeError):
+            await main.download_area_zip("downloads", zip_request)
+        self.assertEqual(captured["names"], ["nested/stream.bin", "sample.bin"])
+
+
+def make_directory_alias(path):
+    """Return another spelling of ``path`` that resolves to it, or None."""
+    alias = f"{path}-alias"
+    if os.name == "nt":
+        try:
+            import _winapi
+            _winapi.CreateJunction(path, alias)  # needs no special privileges
+        except (ImportError, AttributeError, OSError):
+            return None
+    else:
+        try:
+            os.symlink(path, alias, target_is_directory=True)
+        except OSError:
+            return None
+    return alias
+
 
 if __name__ == "__main__":
     unittest.main()

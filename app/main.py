@@ -108,6 +108,16 @@ def resolve_area(area: str) -> str:
         raise HTTPException(status_code=404, detail="unknown area")
 
 
+def area_rel_path(full_path: str, base_dir: str) -> str:
+    """Path of a saved file relative to its area, for display and checksum keys.
+
+    Saved paths come from safe_join/reserve_unique_path_nested, which resolve
+    symlinks, junctions and Windows 8.3 short names. Resolve the base the same
+    way, or relpath walks out of the area (for example ``../../RUNNER~1/...``).
+    """
+    return normalize_rel_path(os.path.relpath(full_path, os.path.realpath(base_dir)))
+
+
 def discard_files(*paths: str) -> None:
     """Best-effort removal of temporary files."""
     for path in paths:
@@ -666,7 +676,7 @@ async def _upload_stream(request: Request, reservation_id: str):
         release_reserved_path(final_path)
         raise HTTPException(status_code=499, detail=f"stream upload interrupted: {exc}")
 
-    rel_path = normalize_rel_path(os.path.relpath(final_path, target_dir))
+    rel_path = area_rel_path(final_path, target_dir)
     sha = sha256.hexdigest() if sha256 else None
     checksum_info = None
     if sha:
@@ -712,7 +722,7 @@ async def _finish_upload(upload_id: str, request: Request):
         final_path, sha = result.split("|sha256:", 1)
     else:
         final_path, sha = result, None
-    rel_path = normalize_rel_path(os.path.relpath(final_path, meta.destination_dir()))
+    rel_path = area_rel_path(final_path, meta.destination_dir())
     checksum_info = None
     if sha:
         try:
@@ -853,7 +863,7 @@ async def download_area_zip(area: str, request: Request):
             except ValueError:
                 continue
             if os.path.isfile(full):
-                files.append((full, normalize_rel_path(os.path.relpath(full, base))))
+                files.append((full, area_rel_path(full, base)))
     else:
         listed = await asyncio.to_thread(lambda: list(iter_files_within(base, area)))
         files = [(os.path.join(base, f["path"].replace("/", os.sep)), f["path"]) for f in listed]
