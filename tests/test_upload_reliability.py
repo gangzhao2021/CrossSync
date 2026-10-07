@@ -339,7 +339,8 @@ class SafeDeleteTests(unittest.IsolatedAsyncioTestCase):
         self.trashed = []
 
         def fake_trash(path):
-            self.trashed.append(os.path.relpath(path, self.folder).replace(os.sep, "/"))
+            # Paths arrive resolved (Windows CI temp dirs use 8.3 short names), so resolve the base too.
+            self.trashed.append(os.path.relpath(path, os.path.realpath(self.folder)).replace(os.sep, "/"))
             os.remove(path)
 
         self.stack.enter_context(patch.object(library, "move_to_trash", side_effect=fake_trash))
