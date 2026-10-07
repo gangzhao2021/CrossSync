@@ -73,7 +73,7 @@ final class ChunkedUploadService: @unchecked Sendable {
                             chunkSize: chunkSize,
                             index: index
                         )
-                        let chunkURL = try Self.makeChunkFile(
+                        let (chunkURL, chunkSHA256) = try Self.makeChunkFile(
                             sourceURL: asset.url,
                             offset: offset,
                             length: length,
@@ -81,7 +81,6 @@ final class ChunkedUploadService: @unchecked Sendable {
                             index: index
                         )
                         defer { try? FileManager.default.removeItem(at: chunkURL) }
-                        let chunkSHA256 = try Self.sha256(fileURL: chunkURL)
 
                         try await uploadChunkWithRetry(
                             uploadID: initialized.uploadID,
@@ -140,13 +139,13 @@ final class ChunkedUploadService: @unchecked Sendable {
         throw lastError ?? CrossSyncAPIError.invalidResponse
     }
 
-    private static func makeChunkFile(
+    static func makeChunkFile(
         sourceURL: URL,
         offset: Int64,
         length: Int64,
         uploadID: String,
         index: Int
-    ) throws -> URL {
+    ) throws -> (url: URL, sha256: String) {
         let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CrossSyncChunks", isDirectory: true)
             .appendingPathComponent(uploadID, isDirectory: true)
@@ -163,26 +162,18 @@ final class ChunkedUploadService: @unchecked Sendable {
         }
         try input.seek(toOffset: UInt64(offset))
 
+        var hasher = SHA256()
         var remaining = length
         while remaining > 0 {
             let blockSize = Int(min(remaining, 1024 * 1024))
             guard let data = try input.read(upToCount: blockSize), !data.isEmpty else {
                 throw CocoaError(.fileReadCorruptFile)
             }
+            hasher.update(data: data)
             try output.write(contentsOf: data)
             remaining -= Int64(data.count)
         }
-        return destination
-    }
-
-    private static func sha256(fileURL: URL) throws -> String {
-        let input = try FileHandle(forReadingFrom: fileURL)
-        defer { try? input.close() }
-        var hasher = SHA256()
-        while let data = try input.read(upToCount: 1024 * 1024), !data.isEmpty {
-            hasher.update(data: data)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return (destination, hasher.finalize().map { String(format: "%02x", $0) }.joined())
     }
 
     private static func cleanupChunkDirectory(uploadID: String) {

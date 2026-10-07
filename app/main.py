@@ -7,6 +7,9 @@ import shutil
 import ipaddress
 import socket
 import secrets
+import threading
+import re
+from contextlib import asynccontextmanager
 from typing import List, Optional, Dict
 
 from fastapi import FastAPI, Request, HTTPException
@@ -57,6 +60,80 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 upload_store = UploadStore(os.path.join(settings.temp_dir, "uploads"))
 upload_slots = asyncio.Semaphore(settings.max_server_uploads)
+capacity_lock = threading.RLock()
+stream_reservations: Dict[str, tuple] = {}
+
+
+async def run_io(function, *args, **kwargs):
+    # A cancelled HTTP request must not close/delete files a worker still uses.
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        finally:
+            raise
+
+
+@asynccontextmanager
+async def upload_activity(upload_id):
+    entering = asyncio.create_task(asyncio.to_thread(upload_store.begin_activity, upload_id))
+    try:
+        await asyncio.shield(entering)
+        yield
+    finally:
+        try:
+            await entering
+        except Exception:
+            pass
+        else:
+            await run_io(upload_store.end_activity, upload_id)
+
+
+def disk_device(path):
+    return os.stat(path).st_dev
+
+
+def check_upload_capacity(size, target_dir, chunk_size=0, *, stream=False):
+    """Reserve conservatively per volume, including cross-volume final copies.
+
+    Existing session sizes are intentionally not credited for sparse allocation.
+    This can reject early, but never assumes truncate() reserved physical space.
+    Call under capacity_lock before creating a session or stream reservation.
+    """
+    requirements = {}
+    directories = {}
+
+    def add(path, amount):
+        device = disk_device(path)
+        directories[device] = path
+        requirements[device] = requirements.get(device, 0) + amount
+        return device
+
+    def reserve(file_size, destination, chunk, is_stream):
+        temp_device = add(settings.temp_dir, file_size)
+        dest_device = disk_device(destination)
+        if dest_device != temp_device or (not is_stream and not settings.direct_upload_assembly):
+            add(destination, file_size)
+        if not is_stream:
+            add(settings.temp_dir, min(file_size, chunk * settings.max_server_uploads))
+
+    for sid in upload_store.active_sessions():
+        try:
+            meta = upload_store.get_meta(sid)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+        destination = meta.target_dir or (settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir)
+        reserve(meta.size, destination, meta.chunk_size, False)
+    for file_size, destination in stream_reservations.values():
+        reserve(file_size, destination, 0, True)
+    reserve(size, target_dir, chunk_size, stream)
+    for device, amount in requirements.items():
+        if amount + settings.min_free_space_reserve > shutil.disk_usage(directories[device]).free:
+            raise HTTPException(status_code=507, detail="not enough free disk space for upload and temporary files")
 
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#247c6d"/><path fill="#fffefa" d="M18 19h12v6h-6v14h6v6H18V19Zm16 0h12v6h-8v5h7v6h-7v9h-6V19Z"/></svg>"""
 
@@ -267,6 +344,15 @@ class InitUploadBody:
 
 @app.post("/api/init-upload")
 async def init_upload(payload: dict = Body(...)):
+    return await run_io(initialize_upload, payload)
+
+
+def initialize_upload(payload):
+    with capacity_lock:
+        return _initialize_upload(payload)
+
+
+def _initialize_upload(payload):
     try:
         name = sanitize_rel_path(payload["name"])
         size = int(payload["size"])
@@ -300,30 +386,14 @@ async def init_upload(payload: dict = Body(...)):
             existing.fingerprint = fingerprint
             upload_store.update_meta(existing)
     if existing:
-        can_resume = existing.chunk_size == chunk_size
-        if settings.direct_upload_assembly:
-            can_resume = can_resume and os.path.isfile(upload_store.payload_path(existing.upload_id))
-        if can_resume:
-            missing = upload_store.missing_chunks(existing.upload_id)
-            return ORJSONResponse({
-                "resumed": True,
-                "upload_id": existing.upload_id,
-                "chunk_size": existing.chunk_size,
-                "total_chunks": existing.total_chunks,
-                "missing": missing,
-            })
-        upload_store.remove_session(existing.upload_id)
+        resumed = resume_upload(existing.upload_id, chunk_size)
+        if resumed is not None:
+            return resumed
 
-    if len(upload_store.list_sessions()) >= settings.max_active_uploads:
+    if len(upload_store.active_sessions()) >= settings.max_active_uploads:
         raise HTTPException(status_code=503, detail="too many active uploads")
     target_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
-    try:
-        free = shutil.disk_usage(target_dir).free
-    except OSError:
-        free = None
-    reserved = upload_store.reserved_bytes()
-    if free is not None and size + reserved + settings.min_free_space_reserve > free:
-        raise HTTPException(status_code=507, detail="not enough free disk space")
+    check_upload_capacity(size, target_dir, chunk_size)
 
     upload_id = uuid.uuid4().hex
     meta = UploadMeta(
@@ -335,6 +405,7 @@ async def init_upload(payload: dict = Body(...)):
         fingerprint=fingerprint,
         total_chunks=total_chunks,
         received={},
+        target_dir=target_dir,
     )
     upload_store.init_session(meta)
     return ORJSONResponse({
@@ -346,9 +417,40 @@ async def init_upload(payload: dict = Body(...)):
     })
 
 
+def resume_upload(upload_id, chunk_size):
+    with upload_store.session_lock(upload_id):
+        try:
+            existing = upload_store.get_meta(upload_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        completed = upload_store.completion(upload_id)
+        if completed:
+            final_path = completed.split("|sha256:", 1)[0]
+            if not os.path.isfile(final_path) or os.path.getsize(final_path) != existing.size:
+                upload_store.remove_session(upload_id)
+                return None
+        can_resume = bool(completed) or existing.chunk_size == chunk_size
+        if settings.direct_upload_assembly and not completed:
+            can_resume = can_resume and os.path.isfile(upload_store.payload_path(upload_id))
+        if not can_resume:
+            upload_store.remove_session(upload_id)
+            return None
+        upload_store.touch(upload_id)
+        return ORJSONResponse({
+            "resumed": True,
+            "upload_id": upload_id,
+            "chunk_size": existing.chunk_size,
+            "total_chunks": existing.total_chunks,
+            "missing": upload_store.missing_chunks(upload_id),
+        })
+
+
 async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
     async with upload_slots:
-        return await _upload_chunk(upload_id, chunk_index, request)
+        async with upload_activity(upload_id):
+            return await _upload_chunk(upload_id, chunk_index, request)
 
 
 @app.put("/api/upload/{upload_id}/{chunk_index}")
@@ -357,7 +459,7 @@ async def upload_chunk_route(upload_id: str, chunk_index: int, request: Request)
 
 
 async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
-    meta = upload_store.get_meta(upload_id)
+    meta = await run_io(upload_store.get_meta, upload_id)
     if chunk_index < 0 or chunk_index >= meta.total_chunks:
         raise HTTPException(status_code=400, detail="chunk index out of range")
 
@@ -375,7 +477,7 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
     temp_path = upload_store.chunk_temp_path(upload_id, chunk_index)
     total = 0
     try:
-        with open(temp_path, "wb") as f:
+        with open(temp_path, "wb", buffering=0) as f:
             async for block in request.stream():
                 if not block:
                     continue
@@ -384,7 +486,7 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
                     raise HTTPException(status_code=400, detail=f"chunk too large {total} > {expected}")
                 if sha256:
                     sha256.update(block)
-                f.write(block)
+                await run_io(f.write, block)
     except asyncio.CancelledError:
         try:
             os.remove(temp_path)
@@ -418,37 +520,70 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
             pass
         raise HTTPException(status_code=400, detail=f"chunk size mismatch {total} != {expected}")
 
-    upload_store.commit_streamed_chunk(
-        upload_id,
-        chunk_index,
-        temp_path,
-        offset=meta.chunk_size * chunk_index,
-        direct=settings.direct_upload_assembly,
-    )
+    try:
+        await run_io(
+            upload_store.commit_streamed_chunk,
+            upload_id,
+            chunk_index,
+            temp_path,
+            expected_size=expected,
+            offset=meta.chunk_size * chunk_index,
+            direct=settings.direct_upload_assembly,
+        )
+    finally:
+        try:
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
     return ORJSONResponse({"ok": True, "idx": chunk_index})
 
 
 @app.get("/api/upload/{upload_id}/status")
 async def upload_status(upload_id: str):
-    missing = upload_store.missing_chunks(upload_id)
+    missing = await run_io(upload_store.missing_chunks, upload_id)
     return ORJSONResponse({"missing": missing})
 
 
 @app.delete("/api/upload/{upload_id}")
 async def cancel_upload(upload_id: str):
     try:
-        upload_store.get_meta(upload_id)
+        await run_io(upload_store.get_meta, upload_id)
     except HTTPException as exc:
         if exc.status_code == 404:
             return ORJSONResponse({"ok": True, "removed": False})
         raise
-    upload_store.remove_session(upload_id)
+    await run_io(upload_store.remove_session, upload_id)
     return ORJSONResponse({"ok": True, "removed": True})
 
 
+def release_stream_capacity(reservation_id):
+    with capacity_lock:
+        stream_reservations.pop(reservation_id, None)
+
+
+def reserve_stream_capacity(reservation_id, size, target_dir):
+    with capacity_lock:
+        check_upload_capacity(size, target_dir, stream=True)
+        stream_reservations[reservation_id] = (size, target_dir)
+
+
+def publish_stream(temp_path, final_temp_path, final_path):
+    try:
+        os.replace(temp_path, final_path)
+    except OSError:
+        with open(temp_path, "rb") as src, open(final_temp_path, "wb") as out:
+            shutil.copyfileobj(src, out, length=1024 * 1024)
+        os.replace(final_temp_path, final_path)
+        os.remove(temp_path)
+
+
 async def upload_stream(request: Request):
+    reservation_id = uuid.uuid4().hex
     async with upload_slots:
-        return await _upload_stream(request)
+        try:
+            return await _upload_stream(request, reservation_id)
+        finally:
+            await run_io(release_stream_capacity, reservation_id)
 
 
 @app.post("/api/upload-stream")
@@ -456,7 +591,7 @@ async def upload_stream_route(request: Request):
     return await upload_stream(request)
 
 
-async def _upload_stream(request: Request):
+async def _upload_stream(request: Request, reservation_id: str):
     name = request.query_params.get("name") or request.headers.get("x-file-name")
     target = request.query_params.get("target", "downloads")
     if not name or target not in ("downloads", "outbox"):
@@ -474,12 +609,7 @@ async def _upload_stream(request: Request):
         compute_checksum = checksum_flag not in {"0", "false", "False", "no", "off"}
 
     target_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
-    try:
-        free = shutil.disk_usage(target_dir).free
-    except OSError:
-        free = None
-    if free is not None and expected_size + settings.min_free_space_reserve > free:
-        raise HTTPException(status_code=507, detail="not enough free disk space")
+    await run_io(reserve_stream_capacity, reservation_id, expected_size, target_dir)
     try:
         rel = sanitize_rel_path(name)
         final_path = reserve_unique_path_nested(target_dir, rel)
@@ -497,7 +627,7 @@ async def _upload_stream(request: Request):
 
     total = 0
     try:
-        with open(temp_path, "wb") as out:
+        with open(temp_path, "wb", buffering=0) as out:
             async for block in request.stream():
                 if not block:
                     continue
@@ -506,20 +636,11 @@ async def _upload_stream(request: Request):
                     raise HTTPException(status_code=400, detail="stream upload too large")
                 if sha256:
                     sha256.update(block)
-                out.write(block)
+                await run_io(out.write, block)
         if expected_size >= 0 and total != expected_size:
             raise HTTPException(status_code=400, detail=f"stream size mismatch {total} != {expected_size}")
 
-        try:
-            os.replace(temp_path, final_path)
-        except OSError:
-            with open(temp_path, "rb") as src, open(final_temp_path, "wb") as out:
-                shutil.copyfileobj(src, out, length=1024 * 1024)
-            os.replace(final_temp_path, final_path)
-            try:
-                os.remove(temp_path)
-            except FileNotFoundError:
-                pass
+        await run_io(publish_stream, temp_path, final_temp_path, final_path)
     except asyncio.CancelledError:
         for path in (temp_path, final_temp_path):
             try:
@@ -545,7 +666,7 @@ async def _upload_stream(request: Request):
         release_reserved_path(final_path)
         raise HTTPException(status_code=499, detail=f"stream upload interrupted: {exc}")
 
-    base_dir = settings.downloads_dir if target == "downloads" else settings.outbox_dir
+    base_dir = target_dir
     rel_path = normalize_rel_path(os.path.relpath(final_path, base_dir))
     sha = sha256.hexdigest() if sha256 else None
     checksum_info = None
@@ -576,18 +697,23 @@ async def _upload_stream(request: Request):
 
 @app.post("/api/finish-upload/{upload_id}")
 async def finish_upload(upload_id: str, request: Request):
-    meta = upload_store.get_meta(upload_id)
+    async with upload_slots:
+        async with upload_activity(upload_id):
+            return await _finish_upload(upload_id, request)
+
+
+async def _finish_upload(upload_id: str, request: Request):
+    meta = await run_io(upload_store.get_meta, upload_id)
     checksum_flag = request.query_params.get("checksum")
     compute_checksum = settings.record_upload_checksums
     if checksum_flag is not None:
         compute_checksum = checksum_flag not in {"0", "false", "False", "no", "off"}
-    async with upload_slots:
-        result = await asyncio.to_thread(upload_store.assemble, upload_id, compute_sha256=compute_checksum)
+    result = await run_io(upload_store.assemble, upload_id, compute_sha256=compute_checksum)
     if "|sha256:" in result:
         final_path, sha = result.split("|sha256:", 1)
     else:
         final_path, sha = result, None
-    base_dir = settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir
+    base_dir = meta.target_dir or (settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir)
     rel_path = normalize_rel_path(os.path.relpath(final_path, base_dir))
     checksum_info = None
     if sha:
@@ -624,7 +750,8 @@ def is_hidden_transfer_file(rel_path: str) -> bool:
     parts = rel.split("/")
     name = parts[-1] if parts else rel
     return (
-        ".crosssync" in parts
+        ".crosssync" in [part.lower() for part in parts]
+        or bool(re.search(r"\.(?:assembling|streaming)-[a-zA-Z0-9-]+\.tmp$", name))
         or name.endswith(".sha256")
         or name in {".DS_Store", "Thumbs.db"}
     )
@@ -833,6 +960,8 @@ async def api_delete(payload: dict = Body(...)):
             except Exception:
                 pass
             for name in files:
+                if re.search(r"\.(?:assembling|streaming)-[a-zA-Z0-9-]+\.tmp$", name):
+                    continue
                 _remove_file(os.path.join(root, name))
         delete_checksums(area)
         _remove_empty_dirs(base)
@@ -897,19 +1026,7 @@ async def on_startup():
     async def cleanup_loop():
         while True:
             try:
-                now = time.time()
-                base = os.path.join(settings.temp_dir, "uploads")
-                if os.path.isdir(base):
-                    for sid in os.listdir(base):
-                        sp = os.path.join(base, sid)
-                        mp = os.path.join(sp, "meta.json")
-                        try:
-                            mtime = os.path.getmtime(mp)
-                        except Exception:
-                            mtime = os.path.getmtime(sp)
-                        if now - mtime > settings.temp_ttl_seconds:
-                            import shutil
-                            shutil.rmtree(sp, ignore_errors=True)
+                await run_io(upload_store.cleanup_expired)
             except Exception:
                 pass
             await asyncio.sleep(3600)

@@ -4,6 +4,8 @@ import shutil
 import threading
 import unicodedata
 import uuid
+import time
+from functools import wraps
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from fastapi import HTTPException
@@ -21,6 +23,14 @@ _windows_reserved_names = {
 }
 
 
+def session_locked(method):
+    @wraps(method)
+    def guarded(self, upload_id, *args, **kwargs):
+        with self.session_lock(upload_id):
+            return method(self, str(upload_id).lower(), *args, **kwargs)
+    return guarded
+
+
 @dataclass
 class UploadMeta:
     upload_id: str
@@ -31,6 +41,7 @@ class UploadMeta:
     fingerprint: str
     total_chunks: int
     received: Dict[str, int]  # chunk_index -> size (string keys for JSON)
+    target_dir: Optional[str] = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -46,6 +57,100 @@ class UploadStore:
     def __init__(self, base_dir: str):
         self.base_dir = base_dir
         os.makedirs(self.base_dir, exist_ok=True)
+        self._locks = [threading.RLock() for _ in range(128)]
+        self._active: Dict[str, int] = {}
+        self._cancelled: set[str] = set()
+        self._activity_lock = threading.RLock()
+        self._index_lock = threading.RLock()
+        self._fingerprints: Dict[tuple, str] = {}
+        self._session_keys: Dict[str, tuple] = {}
+        self._unfinished: set[str] = set()
+        for sid in self.list_sessions():
+            try:
+                self._index_meta(self.get_meta(sid))
+            except (HTTPException, OSError, ValueError, TypeError):
+                continue
+
+    def _index_meta(self, meta: UploadMeta) -> None:
+        key = (meta.fingerprint, meta.target)
+        completed = self.completion(meta.upload_id)
+        with self._index_lock:
+            previous = self._session_keys.get(meta.upload_id)
+            if previous and self._fingerprints.get(previous) == meta.upload_id:
+                self._fingerprints.pop(previous, None)
+            self._session_keys[meta.upload_id] = key
+            self._fingerprints[key] = meta.upload_id
+            if completed:
+                self._unfinished.discard(meta.upload_id)
+            else:
+                self._unfinished.add(meta.upload_id)
+
+    def _forget(self, upload_id: str) -> None:
+        with self._index_lock:
+            key = self._session_keys.pop(upload_id, None)
+            if key and self._fingerprints.get(key) == upload_id:
+                self._fingerprints.pop(key, None)
+            self._unfinished.discard(upload_id)
+
+    def session_lock(self, upload_id: str):
+        self.session_dir(upload_id)  # Validate before using any session state.
+        return self._locks[int(upload_id, 16) % len(self._locks)]
+
+    @session_locked
+    def begin_activity(self, upload_id: str) -> None:
+        self.get_meta(upload_id)
+        with self._activity_lock:
+            if upload_id in self._cancelled:
+                raise HTTPException(status_code=409, detail="upload cancelled")
+            self._active[upload_id] = self._active.get(upload_id, 0) + 1
+        self.touch(upload_id)
+
+    @session_locked
+    def end_activity(self, upload_id: str) -> None:
+        with self._activity_lock:
+            remaining = self._active.get(upload_id, 1) - 1
+            if remaining:
+                self._active[upload_id] = remaining
+            else:
+                self._active.pop(upload_id, None)
+                if upload_id in self._cancelled:
+                    self._cancelled.discard(upload_id)
+                    shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
+                    self._forget(upload_id)
+
+    def touch(self, upload_id: str) -> None:
+        os.utime(self.meta_path(upload_id), None)
+
+    def completion(self, upload_id: str) -> Optional[str]:
+        try:
+            with open(os.path.join(self.session_dir(upload_id), "completed.json"), encoding="utf-8") as f:
+                return json.load(f)["result"]
+        except FileNotFoundError:
+            return None
+
+    def active_sessions(self) -> List[str]:
+        with self._index_lock:
+            return list(self._unfinished)
+
+    def cleanup_expired(self, now: Optional[float] = None) -> None:
+        now = time.time() if now is None else now
+        for sid in self.list_sessions():
+            try:
+                lock = self.session_lock(sid)
+                if not lock.acquire(blocking=False):
+                    continue
+                try:
+                    with self._activity_lock:
+                        active = self._active.get(sid, 0)
+                    activity_path = self.meta_path(sid)
+                    if not os.path.exists(activity_path):
+                        activity_path = self.session_dir(sid)
+                    if not active and now - os.path.getmtime(activity_path) > settings.temp_ttl_seconds:
+                        self.remove_session(sid)
+                finally:
+                    lock.release()
+            except (OSError, HTTPException):
+                continue
 
     def session_dir(self, upload_id: str) -> str:
         try:
@@ -71,23 +176,33 @@ class UploadStore:
         except FileNotFoundError:
             return []
 
+    @session_locked
     def remove_session(self, upload_id: str) -> None:
+        with self._activity_lock:
+            if self._active.get(upload_id, 0):
+                self._cancelled.add(upload_id)
+                return
         shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
+        self._forget(upload_id)
 
     def find_by_fingerprint(self, fingerprint: str, target: Optional[str] = None) -> Optional[UploadMeta]:
-        for sid in self.list_sessions():
-            try:
-                mp = self.meta_path(sid)
-                meta = UploadMeta.from_file(mp)
-            except Exception:
-                continue
-            if meta.fingerprint == fingerprint and (target is None or meta.target == target):
-                return meta
-        return None
+        with self._index_lock:
+            sid = self._fingerprints.get((fingerprint, target)) if target else next(
+                (sid for key, sid in self._fingerprints.items() if key[0] == fingerprint), None
+            )
+        if sid is None:
+            return None
+        try:
+            return self.get_meta(sid)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            self._forget(sid)
+            return None
 
     def reserved_bytes(self) -> int:
         total = 0
-        for sid in self.list_sessions():
+        for sid in self.active_sessions():
             try:
                 total += max(0, self.get_meta(sid).size)
             except Exception:
@@ -97,15 +212,23 @@ class UploadStore:
     def init_session(self, meta: UploadMeta) -> None:
         sd = self.session_dir(meta.upload_id)
         os.makedirs(sd, exist_ok=True)
-        with open(self.meta_path(meta.upload_id), "w", encoding="utf-8") as f:
-            f.write(meta.to_json())
-        if settings.direct_upload_assembly:
-            with open(self.payload_path(meta.upload_id), "wb") as f:
-                f.truncate(meta.size)
+        try:
+            self.update_meta(meta)
+            if settings.direct_upload_assembly:
+                with open(self.payload_path(meta.upload_id), "wb") as f:
+                    f.truncate(meta.size)
+        except BaseException:
+            self.remove_session(meta.upload_id)
+            raise
 
     def update_meta(self, meta: UploadMeta) -> None:
-        with open(self.meta_path(meta.upload_id), "w", encoding="utf-8") as f:
-            f.write(meta.to_json())
+        with self.session_lock(meta.upload_id):
+            path = self.meta_path(meta.upload_id)
+            temp = f"{path}.{uuid.uuid4().hex}.tmp"
+            with open(temp, "w", encoding="utf-8") as f:
+                f.write(meta.to_json())
+            os.replace(temp, path)
+            self._index_meta(meta)
 
     def write_chunk(self, upload_id: str, idx: int, data: bytes, expected_size: Optional[int] = None):
         sd = self.session_dir(upload_id)
@@ -118,18 +241,26 @@ class UploadStore:
             raise HTTPException(status_code=400, detail="chunk size mismatch")
 
     def chunk_temp_path(self, upload_id: str, idx: int) -> str:
-        return os.path.join(self.session_dir(upload_id), f"{idx:08d}.uploading")
+        return os.path.join(self.session_dir(upload_id), f"{idx:08d}.{uuid.uuid4().hex}.uploading")
 
+    @session_locked
     def commit_streamed_chunk(self, upload_id: str, idx: int, temp_path: str, expected_size: Optional[int] = None, offset: int = 0, direct: bool = False):
         sd = self.session_dir(upload_id)
         if not os.path.isdir(sd):
             raise HTTPException(status_code=404, detail="upload not found")
+        with self._activity_lock:
+            if upload_id in self._cancelled:
+                raise HTTPException(status_code=409, detail="upload cancelled")
         if expected_size is not None and os.path.getsize(temp_path) != expected_size:
             try:
                 os.remove(temp_path)
             except Exception:
                 pass
             raise HTTPException(status_code=400, detail="chunk size mismatch")
+        if self.completion(upload_id) or os.path.isfile(self.chunk_path(upload_id, idx)):
+            os.remove(temp_path)
+            self.touch(upload_id)
+            return
         if direct:
             payload = self.payload_path(upload_id)
             if not os.path.isfile(payload):
@@ -145,8 +276,10 @@ class UploadStore:
                 os.remove(temp_path)
             except FileNotFoundError:
                 pass
+            self.touch(upload_id)
             return
         os.replace(temp_path, self.chunk_path(upload_id, idx))
+        self.touch(upload_id)
 
     def get_meta(self, upload_id: str) -> UploadMeta:
         mp = self.meta_path(upload_id)
@@ -154,9 +287,20 @@ class UploadStore:
             raise HTTPException(status_code=404, detail="upload not found")
         return UploadMeta.from_file(mp)
 
+    @session_locked
     def assemble(self, upload_id: str, compute_sha256: bool = True) -> str:
         meta = self.get_meta(upload_id)
-        target_dir = settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir
+        with self._activity_lock:
+            if upload_id in self._cancelled:
+                raise HTTPException(status_code=409, detail="upload cancelled")
+        completed = self.completion(upload_id)
+        if completed:
+            final_path = completed.split("|sha256:", 1)[0]
+            if not os.path.isfile(final_path) or os.path.getsize(final_path) != meta.size:
+                raise HTTPException(status_code=410, detail="completed file is no longer available")
+            self.touch(upload_id)
+            return completed
+        target_dir = meta.target_dir or (settings.downloads_dir if meta.target == "downloads" else settings.outbox_dir)
         os.makedirs(target_dir, exist_ok=True)
         chunk_paths = []
         for idx in range(meta.total_chunks):
@@ -167,13 +311,28 @@ class UploadStore:
 
         final_path = reserve_unique_path_nested(target_dir, meta.name)
         try:
-            return self._assemble_to_path(
+            result = self._assemble_to_path(
                 upload_id,
                 meta,
                 chunk_paths,
                 final_path,
                 compute_sha256=compute_sha256,
             )
+            receipt = os.path.join(self.session_dir(upload_id), "completed.json")
+            with open(receipt + ".tmp", "w", encoding="utf-8") as f:
+                json.dump({"result": result}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(receipt + ".tmp", receipt)
+            with self._index_lock:
+                self._unfinished.discard(upload_id)
+            self.touch(upload_id)
+            for cp in chunk_paths:
+                try:
+                    os.remove(cp)
+                except FileNotFoundError:
+                    pass
+            return result
         finally:
             release_reserved_path(final_path)
 
@@ -190,6 +349,8 @@ class UploadStore:
         import hashlib
         sha = None
         payload_path = self.payload_path(upload_id)
+        if settings.direct_upload_assembly and not os.path.isfile(payload_path):
+            raise HTTPException(status_code=409, detail="upload payload is unavailable")
         if settings.direct_upload_assembly and os.path.isfile(payload_path):
             if os.path.getsize(payload_path) != meta.size:
                 raise HTTPException(status_code=400, detail="assembled payload size mismatch")
@@ -222,7 +383,6 @@ class UploadStore:
                 except Exception:
                     pass
                 raise
-            shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
             return final_path + (f"|sha256:{sha}" if sha else "")
 
         sha256 = hashlib.sha256() if compute_sha256 else None
@@ -240,6 +400,8 @@ class UploadStore:
                             if sha256:
                                 sha256.update(buf)
                             out.write(buf)
+            if os.path.getsize(temp_path) != meta.size:
+                raise HTTPException(status_code=400, detail="assembled payload size mismatch")
             os.replace(temp_path, final_path)
             if sha256:
                 sha = sha256.hexdigest()
@@ -252,12 +414,13 @@ class UploadStore:
                 pass
             raise
 
-        # Cleanup session
-        shutil.rmtree(self.session_dir(upload_id), ignore_errors=True)
         return final_path + (f"|sha256:{sha}" if sha else "")
 
+    @session_locked
     def missing_chunks(self, upload_id: str) -> List[int]:
         meta = self.get_meta(upload_id)
+        if self.completion(upload_id):
+            return []
         missing = []
         for idx in range(meta.total_chunks):
             if not os.path.isfile(self.chunk_path(upload_id, idx)):

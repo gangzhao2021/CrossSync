@@ -92,3 +92,21 @@ CrossSync keeps a local list of unfinished browser uploads for 48 hours, matchin
 For large videos, keep the page in the foreground until the file completes. If a single chunk stalls, CrossSync aborts that chunk after 180 seconds and retries it automatically.
 
 When choosing from the iPhone Photos library, iOS may spend time exporting or downloading the original asset before Safari receives the file. CrossSync suspends its keep-awake work during this handoff and starts uploading immediately after the page receives the files, but it cannot control the time iOS spends preparing iCloud originals. Selecting smaller batches can make that system handoff shorter.
+
+## Transfer reliability and checks
+
+- Completed chunked uploads retain a receipt for 48 hours after their last activity. Retrying completion, or selecting the same unchanged asset again during that period, reuses the saved file. If the saved file was removed, a new upload is started.
+- An upload keeps the destination directory selected when it was initialized. Changing the receive directory applies to new uploads.
+- Temporary assembly files are excluded from lists, downloads, ZIP selection, and clear actions. Cancelled uploads cannot commit in-flight chunks; their temporary files are removed after active requests finish.
+- Space checks include both temporary and destination volumes, plus concurrent uploads. Reservations are conservative for sparse files and may reject a new upload before the disk is physically full.
+- Keep the default single server process: upload coordination and stream reservations are process-local.
+- File-list refreshes are coalesced, unchanged lists keep their controls and selection, and hidden browser pages stop polling. Large file copies and upload writes run outside the request event loop.
+
+Run the backend and browser-controller regression suites after installing `requirements-dev.txt`:
+
+```text
+python -m unittest discover -s tests
+node --test tests/file-list-refresh.test.cjs
+```
+
+The iOS test target includes a chunk-range and SHA-256 regression test; run it in Xcode on macOS.

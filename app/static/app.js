@@ -1748,6 +1748,28 @@ function renderArea(area) {
 async function refreshArea(area) {
   const cfg = areaState[area];
   if (!cfg) return;
+  if (cfg.refreshPromise) {
+    if (cfg.refreshFetching) cfg.refreshAgain = true;
+    return cfg.refreshPromise;
+  }
+  cfg.refreshPromise = (async () => {
+    // Collapse a batch of upload completions into one list request.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    do {
+      cfg.refreshAgain = false;
+      cfg.refreshFetching = true;
+      await loadArea(area);
+      cfg.refreshFetching = false;
+    } while (cfg.refreshAgain);
+  })().finally(() => {
+    cfg.refreshPromise = null;
+    cfg.refreshFetching = false;
+  });
+  return cfg.refreshPromise;
+}
+
+async function loadArea(area) {
+  const cfg = areaState[area];
   try {
     const statusByPath = new Map(cfg.files.map((file) => [
       file.path,
@@ -1757,6 +1779,9 @@ async function refreshArea(area) {
       },
     ]));
     const data = await fetchJson(`/api/list/${area}`);
+    const snapshot = JSON.stringify(data.files || []);
+    if (snapshot === cfg.serverSnapshot) return;
+    cfg.serverSnapshot = snapshot;
     cfg.files = (data.files || []).sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path));
     cfg.files.forEach((file) => {
       const status = statusByPath.get(file.path);
@@ -1886,10 +1911,10 @@ document.addEventListener('keydown', (event) => {
 });
 initPwa();
 setInterval(() => {
-  if (!hasActiveTransfers()) refreshArea('downloads');
+  if (!document.hidden && !hasActiveTransfers() && !areaState.downloads.refreshPromise) refreshArea('downloads');
 }, 15000);
 setInterval(() => {
-  if (!hasActiveTransfers()) refreshArea('outbox');
+  if (!document.hidden && !hasActiveTransfers() && !areaState.outbox.refreshPromise) refreshArea('outbox');
 }, 15000);
 
 async function extractDroppedFiles(dataTransfer) {

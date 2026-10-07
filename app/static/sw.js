@@ -1,4 +1,4 @@
-const CACHE_NAME = 'crosssync-shell-20260718-scanback-v1';
+const CACHE_NAME = 'crosssync-shell-20260908-reliability';
 const SHELL_ASSETS = [
   '/manifest.webmanifest',
   '/static/styles.css',
