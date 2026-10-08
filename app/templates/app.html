@@ -47,14 +47,14 @@
 
     <div class="workspace-main">
       <header class="workspace-statusbar">
-        <a class="statusbar-back" href="/" aria-label="返回扫码界面" title="返回扫码界面">
+        <a class="statusbar-back host-only" href="/" aria-label="返回扫码界面" title="返回扫码界面">
           <img src="/static/icons/tabler/home.svg" alt="" />
           <span class="desktop-scan-label">返回扫码页</span>
           <span class="mobile-scan-label">扫码</span>
         </a>
-        <div class="statusbar-item connected" role="status">
-          <img src="/static/icons/tabler/device-desktop.svg" alt="" />
-          <strong><span id="computer-name">Home PC</span> 已连接</strong>
+        <div id="connection-status" class="statusbar-item connected" role="status" aria-live="polite">
+          <img src="/static/icons/tabler/wifi.svg" alt="" />
+          <strong><span id="computer-name" class="statusbar-computer-name">这台电脑</span> <span id="connection-label">已连接</span></strong>
         </div>
         <span class="statusbar-divider" aria-hidden="true"></span>
         <div id="security-badge" class="statusbar-item" role="status">
@@ -69,8 +69,9 @@
       <main class="transfer-home">
         <section class="transfer-hero" aria-labelledby="transfer-title-main">
           <div class="transfer-heading">
-            <p class="workspace-eyebrow">IPHONE → COMPUTER</p>
-            <h1 id="transfer-title-main">发送到 <span id="computer-name-heading">Home PC</span></h1>
+            <p class="workspace-eyebrow">iPhone → 电脑</p>
+            <h1 id="transfer-title-main">发送到 <span id="computer-name-heading">这台电脑</span></h1>
+            <button id="btn-rename-computer" class="inline-action rename-action host-only" type="button">起个好记的名字</button>
             <div class="destination-line">
               <img src="/static/icons/tabler/device-desktop.svg" alt="" />
               <span>保存到</span>
@@ -105,6 +106,19 @@
 
           <p id="picker-note" class="picker-note" role="status" aria-live="polite" hidden></p>
 
+          <div id="batch-result" class="batch-result" role="status" aria-live="polite" data-tone="success" hidden>
+            <img id="batch-result-icon" src="/static/icons/tabler/circle-check.svg" alt="" />
+            <div class="batch-result-copy">
+              <strong id="batch-result-title">已保存</strong>
+              <p id="batch-result-copy"></p>
+            </div>
+            <div class="batch-result-actions">
+              <button id="btn-batch-again" class="btn small primary" type="button">再传一批</button>
+              <button id="btn-batch-open" class="btn small" type="button" hidden>打开文件夹</button>
+              <button id="btn-batch-view" class="btn small ghost" type="button">查看文件</button>
+            </div>
+          </div>
+
           <div id="pending-resume" class="pending-resume" hidden>
             <div>
               <strong><span id="pending-resume-count">0</span> 个传输等待续传</strong>
@@ -127,27 +141,27 @@
           <section id="transfer-live-region" class="transfer-live-region" data-has-active="false" aria-labelledby="live-transfer-title">
             <div class="live-transfer-head">
               <div>
-                <p class="workspace-eyebrow">TRANSFER</p>
+                <p class="workspace-eyebrow">传输</p>
                 <h2 id="live-transfer-title">当前传输</h2>
               </div>
               <div class="live-transfer-summary" aria-live="polite">
                 <span><b id="sum-active">0</b> 进行中</span>
                 <span><b id="sum-completed">0</b> 已完成</span>
                 <span><b id="sum-failed">0</b> 失败</span>
-                <span id="sum-speed">0 B/s</span>
-                <span>预计 <b id="sum-eta">-</b></span>
+                <span>速度 <b id="sum-speed">—</b></span>
+                <span>剩余 <b id="sum-eta">—</b></span>
               </div>
             </div>
             <div class="bar live-summary-bar"><div id="sum-bar"></div></div>
 
             <div class="compact-stages" aria-label="传输阶段">
-              <article id="lane-preparing" class="compact-stage" data-active="false">
+              <article id="lane-preparing" class="compact-stage" data-active="false" hidden>
                 <img src="/static/icons/tabler/cloud-download.svg" alt="" />
                 <div><strong id="stage-preparing-title">照片准备</strong><small id="stage-preparing-copy">等待 iOS 返回所选文件</small></div>
                 <b id="stage-preparing-count">0</b>
                 <span class="stage-bar"><i id="stage-preparing-bar"></i></span>
               </article>
-              <article id="lane-waiting" class="compact-stage" data-active="false">
+              <article id="lane-waiting" class="compact-stage" data-active="false" hidden>
                 <img src="/static/icons/tabler/clock.svg" alt="" />
                 <div><strong>等待传输</strong><small id="stage-waiting-copy">就绪文件会自动开始传输</small></div>
                 <b id="stage-waiting-count">0</b>
@@ -156,7 +170,7 @@
               <article id="lane-uploading" class="compact-stage" data-active="false">
                 <img src="/static/icons/tabler/upload.svg" alt="" />
                 <div><strong>上传中</strong><small id="stage-upload-copy">局域网直写电脑保存位置</small></div>
-                <b><span id="stage-upload-count">0</span><span id="stage-speed-inline"> · 0 B/s</span></b>
+                <b><span id="stage-upload-count">0</span><span id="stage-speed-inline"></span></b>
                 <span class="stage-bar"><i id="stage-upload-bar"></i></span>
               </article>
             </div>
@@ -172,7 +186,7 @@
           <section class="recent-transfers" aria-labelledby="recent-title">
             <div class="recent-header">
               <div>
-                <p class="workspace-eyebrow">COMPUTER</p>
+                <p class="workspace-eyebrow">电脑</p>
                 <h2 id="recent-title">最近传输</h2>
               </div>
               <div class="recent-actions">
@@ -255,7 +269,7 @@
 
           <section class="utility-card file-section outbox-section">
             <div class="section-head">
-              <div><p class="workspace-eyebrow">IPHONE</p><h2>iPhone 共享箱</h2></div>
+              <div><p class="workspace-eyebrow">iPhone</p><h2>iPhone 共享箱</h2></div>
               <div class="toolbar">
                 <button id="btn-open-outbox" class="icon-btn" type="button" title="打开目录" aria-label="打开目录"><img src="/static/icons/tabler/folder-open.svg" alt="" /><span class="mobile-action-label">打开目录</span></button>
                 <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /><span class="mobile-action-label">刷新</span></button>

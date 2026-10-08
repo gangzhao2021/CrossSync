@@ -75,6 +75,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 - CrossSync 传入的文件记录：`data/.crosssync/transfers.json`
 - 访问令牌和偏好设置：`data/.crosssync/preferences.json`
 
+在电脑上打开工作台，点标题下方的 **起个好记的名字** 可以给电脑改名（例如“书房电脑”），手机网页和原生 App 都会显示这个名字；留空则恢复系统名称。名称保存在 `preferences.json`。
+
 在电脑上打开工作台，在 **电脑接收区** 点 **更改保存位置…** 可以选择任意可写文件夹。选择会保存在 `preferences.json`，下次启动继续使用。如果设置了环境变量 `CROSSSYNC_DOWNLOADS_DIR`，它的优先级更高。
 
 默认不会在文件旁边写 `文件名.sha256`。已有的 `.sha256` 文件会在列表和打包下载中隐藏，但仍可作为旧版校验来源。为了让大文件更快可用，只有在勾选 SHA-256 选项或设置 `CROSSSYNC_RECORD_UPLOAD_CHECKSUMS=1` 时才会计算整文件校验值。如果外部工具需要旁挂文件，启动前设置 `CROSSSYNC_WRITE_SHA256=1`。
@@ -119,7 +121,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 
 ```text
 python -m unittest discover -s tests
-node --test tests/file-list-refresh.test.cjs
+node --test tests/file-list-refresh.test.cjs tests/ui-helpers.test.cjs
 ```
 
 每次推送到 `main` 或提交合并请求时，GitHub Actions 会在 Ubuntu 和 Windows 上自动运行这两组测试。Dependabot 每月检查一次 Python 依赖和 GitHub Actions 的更新。iOS 测试目标包含分片范围和 SHA-256 的回归测试，需要在 macOS 的 Xcode 中运行。

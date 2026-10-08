@@ -2676,3 +2676,144 @@ body.transfer-workspace-body .task-meta {
     display: none;
   }
 }
+
+/* ---- Status, completion and preview refinements ---- */
+
+/* Stages that are not in use are hidden, so let the visible ones share the row. */
+.compact-stages {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.statusbar-item.connected.offline,
+.statusbar-item.connected.offline strong {
+  color: var(--ws-danger);
+}
+
+.statusbar-item.connected.offline img {
+  filter: brightness(0) saturate(100%) invert(48%) sepia(79%) saturate(2476%) hue-rotate(335deg) brightness(102%);
+}
+
+.label-short {
+  display: none;
+}
+
+.rename-action {
+  margin-top: 10px;
+}
+
+.batch-result {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--ws-line);
+  border-radius: 14px;
+  background: var(--ws-surface);
+  color: var(--ws-text);
+}
+
+.batch-result[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--ws-green) 55%, transparent);
+}
+
+.batch-result[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--ws-amber) 60%, transparent);
+}
+
+.batch-result > img {
+  width: 32px;
+  height: 32px;
+  filter: brightness(0) saturate(100%) invert(83%) sepia(31%) saturate(883%) hue-rotate(76deg) brightness(97%);
+}
+
+.batch-result[data-tone="warning"] > img {
+  filter: brightness(0) saturate(100%) invert(82%) sepia(53%) saturate(548%) hue-rotate(350deg) brightness(99%);
+}
+
+.batch-result-copy strong {
+  display: block;
+  font-size: 17px;
+}
+
+.batch-result-copy p {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--ws-muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
+.batch-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.media-tile.fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+}
+
+.media-tile.fallback .media-fallback-icon {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  filter: brightness(0) invert(84%) sepia(8%) saturate(640%) hue-rotate(180deg) brightness(91%);
+}
+
+.media-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ws-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  /* Keep the phone status bar on one line: the heading already names the computer. */
+  .statusbar-computer-name,
+  .statusbar-caption,
+  .statusbar-divider {
+    display: none;
+  }
+
+  .label-full {
+    display: none;
+  }
+
+  .label-short {
+    display: inline;
+  }
+
+  .workspace-statusbar {
+    justify-content: space-between;
+    overflow: hidden;
+  }
+
+  .batch-result {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .batch-result > img {
+    width: 28px;
+    height: 28px;
+  }
+
+  .batch-result-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .batch-result-copy p {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}

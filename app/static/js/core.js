@@ -58,6 +58,16 @@ const els = {
   downloadsFree: $('downloads-free'),
   computerName: $('computer-name'),
   computerNameHeading: $('computer-name-heading'),
+  btnRenameComputer: $('btn-rename-computer'),
+  connectionStatus: $('connection-status'),
+  connectionLabel: $('connection-label'),
+  batchResult: $('batch-result'),
+  batchResultIcon: $('batch-result-icon'),
+  batchResultTitle: $('batch-result-title'),
+  batchResultCopy: $('batch-result-copy'),
+  btnBatchAgain: $('btn-batch-again'),
+  btnBatchOpen: $('btn-batch-open'),
+  btnBatchView: $('btn-batch-view'),
   btnChooseDownloads: $('btn-choose-downloads'),
   inputOutbox: $('input-outbox'),
   btnSendToIphone: $('btn-send-to-iphone'),
@@ -101,14 +111,14 @@ const runtimeConfig = {
   canChooseDownloadsDir: false,
   downloadsFreeBytes: null,
   computerName: '',
+  hostname: '',
+  hasDisplayName: false,
   lanIp: '',
   requestScheme: '',
   caCertificateAvailable: false,
   configError: false,
 };
 let taskSeq = 0;
-let lastAggBytes = 0;
-let lastAggTime = performance.now();
 const claimedPendingUploadIds = new Set();
 
 function storeGet(key, fallback = '') {
@@ -216,7 +226,11 @@ function releasePendingUpload(id) {
 
 function renderPendingUploads() {
   if (!els.pendingResume) return;
-  const pending = readPendingUploads().filter((item) => item.target === 'downloads');
+  // Only offer "re-select to resume" for uploads this page is not already handling.
+  const handledHere = new Set(tasks.filter((task) => task.state !== 'cancelled').map((task) => task.pendingUploadId));
+  const pending = readPendingUploads().filter((item) => (
+    item.target === 'downloads' && !claimedPendingUploadIds.has(item.id) && !handledHere.has(item.id)
+  ));
   els.pendingResume.hidden = pending.length === 0;
   if (!pending.length) return;
   if (els.pendingResumeCount) els.pendingResumeCount.textContent = String(pending.length);
@@ -329,6 +343,73 @@ function formatEta(seconds) {
   return `${minutes} 分 ${rest} 秒`;
 }
 
+// --- Pure helpers (no DOM); covered by tests/ui-helpers.test.cjs ---
+
+// Transfer speed over a sliding window, so bursty chunk completions and very
+// frequent re-renders do not make the number jump to zero.
+class RateMeter {
+  constructor(windowMs = 8000) {
+    this.windowMs = windowMs;
+    this.samples = [];
+  }
+
+  add(bytes, now = performance.now()) {
+    const last = this.samples[this.samples.length - 1];
+    if (last && bytes < last.bytes) this.samples = []; // Total shrank: a task was retried or cleared.
+    else if (last && bytes === last.bytes && now - last.time < 1000) return;
+    this.samples.push({ time: now, bytes });
+    // Keep one sample just outside the window as the anchor for the rate.
+    while (this.samples.length > 2 && now - this.samples[1].time >= this.windowMs) this.samples.shift();
+  }
+
+  rate(now = performance.now()) {
+    if (this.samples.length < 2) return 0;
+    const first = this.samples[0];
+    const last = this.samples[this.samples.length - 1];
+    const seconds = (Math.max(now, last.time) - first.time) / 1000;
+    return seconds > 0 ? Math.max(0, last.bytes - first.bytes) / seconds : 0;
+  }
+}
+
+const NETWORK_ERROR_RE = /failed to fetch|networkerror|load failed|network connection was lost|network request failed|stream upload failed/i;
+
+function isNetworkError(err) {
+  if (!err) return false;
+  if (err.name === 'TypeError' && NETWORK_ERROR_RE.test(err.message || '')) return true;
+  return NETWORK_ERROR_RE.test(err.message || String(err));
+}
+
+const SERVER_ERROR_MESSAGES = [
+  [/not enough free disk space/i, '电脑磁盘空间不足'],
+  [/too many active uploads/i, '电脑正在处理的上传太多，请稍后重试'],
+  [/upload cancelled/i, '上传已取消'],
+  [/completed file is no longer available/i, '电脑上的文件已被移走，请重新上传'],
+  [/upload not found/i, '电脑上找不到这个上传任务，请重新选择文件'],
+  [/checksum mismatch/i, '校验不一致，数据可能在传输中损坏'],
+  [/file is too large/i, '文件太大'],
+];
+
+function describeError(err) {
+  if (isNetworkError(err)) return '与电脑的连接已断开';
+  if (err?.name === 'AbortError') return '请求超时';
+  const message = err?.message || String(err || '');
+  const known = SERVER_ERROR_MESSAGES.find(([pattern]) => pattern.test(message));
+  return known ? known[1] : (message || '传输失败');
+}
+
+function formatFileTime(seconds, now = new Date()) {
+  const date = new Date(seconds * 1000);
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  const startOfDay = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (days === 0) return `今天 ${time}`;
+  if (days === 1) return `昨天 ${time}`;
+  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+// --- End of pure helpers ---
+
 function encodePath(path) {
   return String(path).split('/').map(encodeURIComponent).join('/');
 }
@@ -349,6 +430,56 @@ async function fetchJson(url, options) {
   }
   return res.json();
 }
+
+// Connection to the computer. Network failures flip this immediately; a light
+// /healthz poll notices recovery, and listeners resume interrupted transfers.
+const connection = { online: true, listeners: new Set(), timer: null };
+
+function renderConnectionStatus() {
+  els.connectionStatus?.classList.toggle('offline', !connection.online);
+  if (els.connectionLabel) els.connectionLabel.textContent = connection.online ? '已连接' : '连接已断开，正在重连…';
+}
+
+function setConnectionState(online) {
+  if (connection.online === online) return;
+  connection.online = online;
+  renderConnectionStatus();
+  scheduleConnectionCheck();
+  if (online) connection.listeners.forEach((listener) => listener());
+}
+
+async function checkConnection() {
+  try {
+    const res = await fetch('/healthz', { cache: 'no-store' });
+    setConnectionState(res.ok);
+  } catch (_) {
+    setConnectionState(false);
+  }
+}
+
+function scheduleConnectionCheck() {
+  window.clearTimeout(connection.timer);
+  const wait = connection.online ? 15000 : 3000;
+  connection.timer = window.setTimeout(async () => {
+    if (!document.hidden || !connection.online) await checkConnection();
+    scheduleConnectionCheck();
+  }, wait);
+}
+
+function reportNetworkFailure() {
+  setConnectionState(false);
+}
+
+async function waitForConnection(shouldStop = () => false) {
+  while (!connection.online && !shouldStop()) await delay(500);
+}
+
+window.addEventListener('offline', () => setConnectionState(false));
+window.addEventListener('online', () => void checkConnection());
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) void checkConnection();
+});
+scheduleConnectionCheck();
 
 function hasActiveTransfers() {
   return tasks.some((task) => ['preparing', 'active', 'paused', 'finishing'].includes(task.state));
@@ -454,7 +585,11 @@ function renderEnvironmentStatus() {
 
   if (els.securityBadge) {
     const label = els.securityBadge.querySelector('strong') || els.securityBadge;
-    label.textContent = secure ? 'HTTPS 加密连接' : '本地连接 · 未加密';
+    // The short form keeps the status bar on one line on narrow phones.
+    label.replaceChildren(
+      h('span', { class: 'label-full', text: secure ? 'HTTPS 加密连接' : '本地连接 · 未加密' }),
+      h('span', { class: 'label-short', text: secure ? '已加密' : '未加密' }),
+    );
     els.securityBadge.classList.toggle('warning', !secure);
   }
   if (els.appModeBadge) {

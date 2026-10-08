@@ -47,4 +47,4 @@ jobs:
         with:
           node-version: "22"
       - name: Run Node tests
-        run: node --test tests/file-list-refresh.test.cjs
+        run: node --test tests/file-list-refresh.test.cjs tests/ui-helpers.test.cjs

@@ -50,7 +50,10 @@ els.btnClearFinished?.addEventListener('click', () => {
       tasks.splice(idx, 1);
     }
   }
+  hideBatchResult();
   updateSummary();
+  // Failed uploads that were cleared from the queue become "re-select to resume" items.
+  renderPendingUploads();
 });
 
 document.querySelectorAll('[data-menu]').forEach((button) => {
@@ -158,7 +161,7 @@ function startDownload(area, paths = []) {
 }
 
 function checksumLabel(file) {
-  if (!file.sha256) return '无校验值';
+  if (!file.sha256) return '';
   if (!file.checksum_fresh) return '校验值待复核';
   return file.checksum_source === 'sidecar' ? '旧校验值' : '有校验值';
 }
@@ -233,7 +236,7 @@ function renderArea(area) {
 
     const meta = h('span', {
       title: file.sha256 ? `SHA-256: ${file.sha256}` : '',
-      text: `${formatBytes(file.size)} · ${new Date(file.mtime * 1000).toLocaleString()} · ${checksumLabel(file)}`,
+      text: [formatBytes(file.size), formatFileTime(file.mtime), checksumLabel(file)].filter(Boolean).join(' · '),
     });
     const verifyStatus = h('span', {
       class: `verify-status ${file.verifyStatusTone || ''}`.trim(),
