@@ -32,7 +32,7 @@ ZIP_READ_SIZE = 1024 * 1024
 
 
 def iter_files_within(base_dir: str, area: Optional[str] = None):
-    records = checksum_snapshot() if area else None
+    records = checksum_snapshot(area) if area else None
     for root, dirs, files in os.walk(base_dir):
         dirs[:] = [d for d in dirs if d != ".crosssync" and not os.path.islink(os.path.join(root, d))]
         for f in files:
@@ -55,6 +55,30 @@ def iter_files_within(base_dir: str, area: Optional[str] = None):
                     item["checksum_source"] = checksum.get("source")
                     item["checksum_fresh"] = bool(checksum.get("matches_file_metadata", True))
             yield item
+
+
+def list_files(base_dir: str, area: str, limit: int = 0) -> Tuple[List[dict], int]:
+    """Newest files first, optionally only the newest `limit`, plus the total count.
+
+    Checksum lookups run only for the files returned, so a large personal
+    folder costs one stat per file rather than a full metadata pass.
+    """
+    files = sorted(iter_files_within(base_dir), key=lambda item: (-item["mtime"], item["path"]))
+    total = len(files)
+    if limit > 0:
+        files = files[:limit]
+    records = checksum_snapshot(area)
+    for item in files:
+        full = os.path.join(base_dir, item["path"].replace("/", os.sep))
+        try:
+            checksum = checksum_for_file(area, item["path"], full, records)
+        except OSError:
+            continue
+        if checksum:
+            item["sha256"] = checksum["sha256"]
+            item["checksum_source"] = checksum.get("source")
+            item["checksum_fresh"] = bool(checksum.get("matches_file_metadata", True))
+    return files, total
 
 
 class _ChunkSink:
@@ -152,10 +176,11 @@ def trash_files(area: str, base: str, full_paths: List[str]) -> Tuple[List[str],
 
 
 @router.get("/api/list/{area}")
-async def list_area(area: str):
+async def list_area(area: str, limit: int = 0):
     base = resolve_area(area)
-    files = await asyncio.to_thread(lambda: list(iter_files_within(base, area)))
-    return JSONResponse({"files": files})
+    limit = max(0, min(limit, 5000))
+    files, total = await asyncio.to_thread(list_files, base, area, limit)
+    return JSONResponse({"files": files, "total": total, "truncated": total > len(files)})
 
 
 @router.post("/api/verify")
@@ -202,7 +227,7 @@ async def download_area_zip(area: str, request: Request):
             if os.path.isfile(full):
                 files.append((full, area_rel_path(full, base)))
     else:
-        listed = await asyncio.to_thread(lambda: list(iter_files_within(base, area)))
+        listed = await asyncio.to_thread(lambda: list(iter_files_within(base)))
         files = [(os.path.join(base, f["path"].replace("/", os.sep)), f["path"]) for f in listed]
     if not files:
         raise HTTPException(status_code=404, detail="no files")

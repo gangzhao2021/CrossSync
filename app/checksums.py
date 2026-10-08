@@ -1,45 +1,18 @@
 import hashlib
 import json
 import os
-import threading
 import time
 from typing import Dict, List, Optional
 
-from .config import settings
-
-
-CHECKSUM_FILE = "checksums.json"
-_store_lock = threading.RLock()
+from . import metadb
 
 
 def normalize_rel_path(path: str) -> str:
     return path.replace("\\", "/").strip("/")
 
 
-def _store_path() -> str:
-    return os.path.join(settings.metadata_dir, CHECKSUM_FILE)
-
-
 def _checksum_key(area: str, rel_path: str) -> str:
     return f"{area}:{normalize_rel_path(rel_path)}"
-
-
-def _read_store() -> Dict[str, dict]:
-    try:
-        with open(_store_path(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def _write_store(data: Dict[str, dict]) -> None:
-    os.makedirs(settings.metadata_dir, exist_ok=True)
-    path = _store_path()
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-    os.replace(tmp_path, path)
 
 
 def _file_stat(full_path: str) -> dict:
@@ -63,9 +36,16 @@ def sha256_file(full_path: str) -> str:
     return h.hexdigest()
 
 
-def checksum_snapshot() -> Dict[str, dict]:
-    with _store_lock:
-        return dict(_read_store())
+def checksum_snapshot(area: Optional[str] = None) -> Dict[str, dict]:
+    """All checksum records, or only one area's, keyed by "area:path"."""
+    with metadb.connect() as conn:
+        if area:
+            rows = conn.execute(
+                "SELECT key, record FROM checksums WHERE key >= ? AND key < ?", (f"{area}:", f"{area};")
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT key, record FROM checksums").fetchall()
+    return {key: json.loads(record) for key, record in rows}
 
 
 def record_checksum(area: str, rel_path: str, full_path: str, sha256: str) -> dict:
@@ -80,26 +60,20 @@ def record_checksum(area: str, rel_path: str, full_path: str, sha256: str) -> di
         "saved_at": int(time.time()),
         "source": "manifest",
     }
-    with _store_lock:
-        data = _read_store()
-        data[_checksum_key(area, rel)] = record
-        _write_store(data)
+    with metadb.connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO checksums (key, record) VALUES (?, ?)",
+            (_checksum_key(area, rel), json.dumps(record, ensure_ascii=False)),
+        )
     return record
 
 
 def delete_checksums(area: str, paths: Optional[List[str]] = None) -> None:
-    with _store_lock:
-        data = _read_store()
-        if not data:
-            return
-
+    with metadb.connect() as conn:
         if paths is None:
-            prefix = f"{area}:"
-            data = {key: value for key, value in data.items() if not key.startswith(prefix)}
+            conn.execute("DELETE FROM checksums WHERE key >= ? AND key < ?", (f"{area}:", f"{area};"))
         else:
-            for path in paths:
-                data.pop(_checksum_key(area, path), None)
-        _write_store(data)
+            conn.executemany("DELETE FROM checksums WHERE key = ?", [(_checksum_key(area, p),) for p in paths])
 
 
 def _legacy_sidecar_checksum(area: str, rel_path: str, full_path: str) -> Optional[dict]:

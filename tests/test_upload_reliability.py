@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 import app.main as main
-from app import common, library, transfer_log, transfers
+from app import common, library, metadb, transfer_log, transfers
 from app.config import settings
 from app.uploader import UploadStore
 
@@ -26,6 +26,7 @@ class ChunkRequest:
     def __init__(self, data, ready=None, release=None):
         self.data = data
         self.headers = {"x-sha256": hashlib.sha256(data).hexdigest()}
+        self.query_params = {}
         self.ready = ready
         self.release = release
 
@@ -46,6 +47,7 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         root = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="crosssync-regression-"))
+        self.addCleanup(metadb.close_all)  # Release the database before the folder is removed.
         self.destination = os.path.join(root, "downloads")
         self.temp = os.path.join(root, "temp")
         self.metadata = os.path.join(root, "metadata")
@@ -91,18 +93,23 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
         os.remove(first["saved"])
         self.assertNotEqual((await self.initialize())["upload_id"], sid)
 
-    async def test_concurrent_duplicate_chunks_never_share_staging_file(self):
+    async def test_concurrent_duplicate_chunks_never_write_the_same_bytes_at_once(self):
         sid = (await self.initialize(size=4))["upload_id"]
         ready_a, ready_b, release_a, release_b = [asyncio.Event() for _ in range(4)]
         first = asyncio.create_task(transfers.upload_chunk(sid, 0, ChunkRequest(b"aaaa", ready_a, release_a)))
         second = asyncio.create_task(transfers.upload_chunk(sid, 0, ChunkRequest(b"bbbb", ready_b, release_b)))
         await asyncio.wait_for(asyncio.gather(ready_a.wait(), ready_b.wait()), 5)
+        # The first request writes in place; only the racing duplicate is staged.
         staging = [p for p in os.listdir(self.store.session_dir(sid)) if p.endswith(".uploading")]
-        self.assertEqual(len(staging), 2)
+        self.assertEqual(len(staging), 1)
+        # Let the duplicate finish first: it must wait for the in-place writer.
+        release_b.set()
+        await asyncio.sleep(0.2)
+        self.assertFalse(second.done())
         release_a.set()
         await first
-        release_b.set()
         await second
+        self.assertFalse(any(p.endswith(".uploading") for p in os.listdir(self.store.session_dir(sid))))
         receipt = json.loads((await transfers.finish_upload(sid, finish_request())).body)
         with open(receipt["saved"], "rb") as f:
             self.assertEqual(f.read(), b"aaaa")
@@ -190,7 +197,7 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_commit_does_not_block_other_requests(self):
         sid = (await self.initialize(size=4))["upload_id"]
         entered, release = threading.Event(), threading.Event()
-        original = self.store.commit_streamed_chunk
+        original = self.store.mark_chunk
 
         def slow_commit(*args, **kwargs):
             entered.set()
@@ -198,7 +205,7 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 raise TimeoutError("test failed to release commit")
             return original(*args, **kwargs)
 
-        with patch.object(self.store, "commit_streamed_chunk", side_effect=slow_commit):
+        with patch.object(self.store, "mark_chunk", side_effect=slow_commit):
             task = asyncio.create_task(transfers.upload_chunk(sid, 0, ChunkRequest(b"abcd")))
             try:
                 self.assertTrue(await asyncio.to_thread(entered.wait, 5))
@@ -280,6 +287,67 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
             second = await self.initialize(name="second.bin", resume_key="second", size=0)
             self.assertNotEqual(second["upload_id"], sid)
 
+    async def test_chunks_are_written_once_in_place(self):
+        with patch.object(self.store, "chunk_temp_path", side_effect=AssertionError("staged a chunk")):
+            sid = (await self.initialize())["upload_id"]
+            await transfers.upload_chunk(sid, 1, ChunkRequest(b"efgh"))
+            await transfers.upload_chunk(sid, 0, ChunkRequest(b"abcd"))
+            receipt = json.loads((await transfers.finish_upload(sid, finish_request())).body)
+        with open(receipt["saved"], "rb") as f:
+            self.assertEqual(f.read(), b"abcdefgh")
+
+    async def test_rejected_in_place_chunk_is_rewritten_on_retry(self):
+        sid = (await self.initialize())["upload_id"]
+        await transfers.upload_chunk(sid, 0, ChunkRequest(b"abcd"))
+        bad = ChunkRequest(b"XXXX")
+        bad.headers["x-sha256"] = hashlib.sha256(b"efgh").hexdigest()
+        with self.assertRaises(HTTPException):
+            await transfers.upload_chunk(sid, 1, bad)
+        self.assertEqual(self.store.missing_chunks(sid), [1])
+        await transfers.upload_chunk(sid, 1, ChunkRequest(b"efgh"))
+        receipt = json.loads((await transfers.finish_upload(sid, finish_request())).body)
+        with open(receipt["saved"], "rb") as f:
+            self.assertEqual(f.read(), b"abcdefgh")
+
+    async def test_single_chunk_file_finishes_in_the_chunk_request(self):
+        sid = (await self.initialize(size=4))["upload_id"]
+        request = ChunkRequest(b"abcd")
+        request.query_params = {"finish": "1", "checksum": "1"}
+        body = json.loads((await transfers.upload_chunk(sid, 0, request)).body)
+        self.assertEqual(body["finished"]["path"], "sample.bin")
+        self.assertEqual(body["finished"]["sha256"], hashlib.sha256(b"abcd").hexdigest())
+        # A retried request after a lost response returns the same file.
+        retry = ChunkRequest(b"abcd")
+        retry.query_params = {"finish": "1"}
+        again = json.loads((await transfers.upload_chunk(sid, 0, retry)).body)
+        self.assertEqual(again["finished"]["saved"], body["finished"]["saved"])
+        self.assertEqual(os.listdir(self.destination), ["sample.bin"])
+
+    async def test_finish_flag_waits_for_missing_chunks(self):
+        sid = (await self.initialize())["upload_id"]
+        request = ChunkRequest(b"abcd")
+        request.query_params = {"finish": "1"}
+        body = json.loads((await transfers.upload_chunk(sid, 0, request)).body)
+        self.assertNotIn("finished", body)
+
+    async def test_body_blocks_are_batched_into_large_writes(self):
+        class Body:
+            async def stream(self):
+                for _ in range(48):
+                    yield b"x" * 65536
+
+        class Sink:
+            writes = []
+
+            def write(self, data):
+                self.writes.append(len(data))
+
+        sink = Sink()
+        total = await transfers.receive_into(sink, Body(), -1, None, "too large")
+        self.assertEqual(total, 48 * 65536)
+        self.assertEqual(sum(sink.writes), total)
+        self.assertLessEqual(len(sink.writes), 3)
+
     async def test_aliased_destination_reports_area_relative_paths(self):
         # A receive folder reached through a junction, symlink or 8.3 short name
         # must still report "sample.bin", not "../../<resolved path>/sample.bin".
@@ -331,6 +399,7 @@ class SafeDeleteTests(unittest.IsolatedAsyncioTestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         root = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="crosssync-delete-"))
+        self.addCleanup(metadb.close_all)
         self.folder = os.path.join(root, "Pictures")
         self.metadata = os.path.join(root, "metadata")
         os.makedirs(self.folder)

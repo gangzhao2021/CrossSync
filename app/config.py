@@ -168,6 +168,11 @@ def load_env_overrides():
     ob = os.getenv("CROSSSYNC_OUTBOX_DIR")
     if ob:
         settings.outbox_dir = os.path.abspath(ob)
+    # Upload sessions (and, with direct assembly, the file being received) live
+    # here; keep it on the same fast disk as the receive folder.
+    temp = os.getenv("CROSSSYNC_TEMP_DIR")
+    if temp:
+        settings.temp_dir = os.path.abspath(temp)
     w = os.getenv("CROSSSYNC_WRITE_SHA256")
     if w is not None:
         settings.write_sha256_sidecar = _env_truthy(w)

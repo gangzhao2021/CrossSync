@@ -32,6 +32,9 @@ from .uploader import (
 from .utils import file_fingerprint, legacy_file_fingerprint
 
 router = APIRouter()
+# Request bodies arrive in ~64 KB blocks; batching them into 1 MB writes means
+# one worker-thread hop per megabyte instead of sixteen.
+WRITE_BATCH_BYTES = 1024 * 1024
 
 upload_store = UploadStore(os.path.join(settings.temp_dir, "uploads"))
 upload_slots = asyncio.Semaphore(settings.max_server_uploads)
@@ -110,6 +113,36 @@ def record_saved_file(area: str, rel_path: str, full_path: str, sha: Optional[st
         return record_checksum(area, rel_path, full_path, sha)
     except Exception:
         return None
+
+
+async def receive_into(sink, request: Request, limit: int, sha256, too_large: str) -> int:
+    """Stream the request body into an open binary file; returns the byte count."""
+    total = 0
+    pending = bytearray()
+    async for block in request.stream():
+        if not block:
+            continue
+        total += len(block)
+        if 0 <= limit < total:
+            raise HTTPException(status_code=400, detail=too_large)
+        if sha256:
+            sha256.update(block)
+        pending += block
+        if len(pending) >= WRITE_BATCH_BYTES:
+            await run_io(sink.write, bytes(pending))
+            pending.clear()
+    if pending:
+        await run_io(sink.write, bytes(pending))
+    return total
+
+
+async def drain(request: Request) -> None:
+    async for _ in request.stream():
+        pass
+
+
+def wants_finish(request: Request) -> bool:
+    return request.query_params.get("finish") in {"1", "true", "yes"}
 
 
 @router.post("/api/init-upload")
@@ -236,46 +269,69 @@ async def _upload_chunk(upload_id: str, chunk_index: int, request: Request):
     if chunk_index == meta.total_chunks - 1:
         expected = meta.size - meta.chunk_size * (meta.total_chunks - 1)
 
-    hdr = request.headers.get('x-sha256')
-    sha256 = hashlib.sha256() if hdr else None
+    if await run_io(upload_store.chunk_done, upload_id, chunk_index):
+        await drain(request)  # A retry of a chunk that already landed.
+    else:
+        await receive_chunk(upload_id, chunk_index, request, meta, expected)
 
-    temp_path = upload_store.chunk_temp_path(upload_id, chunk_index)
-    total = 0
+    body = {"ok": True, "idx": chunk_index}
+    # Single-chunk files (most photos) finish in the same request: one round
+    # trip instead of two after init.
+    if wants_finish(request) and not await run_io(upload_store.missing_chunks, upload_id):
+        body["finished"] = await finish_result(upload_id, request)
+    return JSONResponse(body)
+
+
+async def receive_chunk(upload_id: str, chunk_index: int, request: Request, meta, expected: int) -> None:
+    hdr = request.headers.get("x-sha256")
+    sha256 = hashlib.sha256() if hdr else None
+    offset = meta.chunk_size * chunk_index
+    direct = settings.direct_upload_assembly and upload_store.claim_chunk(upload_id, chunk_index)
+    staged = settings.direct_upload_assembly and not direct
+    temp_path = None
     try:
-        with open(temp_path, "wb", buffering=0) as f:
-            async for block in request.stream():
-                if not block:
-                    continue
-                total += len(block)
-                if total > expected:
-                    raise HTTPException(status_code=400, detail=f"chunk too large {total} > {expected}")
-                if sha256:
-                    sha256.update(block)
-                await run_io(f.write, block)
+        if direct:
+            sink = await run_io(upload_store.open_payload_writer, upload_id, offset)
+        else:
+            temp_path = upload_store.chunk_temp_path(upload_id, chunk_index)
+            sink = await run_io(open, temp_path, "wb", buffering=0)
+        try:
+            total = await receive_into(sink, request, expected, sha256, f"chunk too large: more than {expected} bytes")
+        finally:
+            await run_io(sink.close)
         if sha256 and sha256.hexdigest().lower() != hdr.lower():
             raise HTTPException(status_code=400, detail="chunk checksum mismatch")
         if total != expected:
             raise HTTPException(status_code=400, detail=f"chunk size mismatch {total} != {expected}")
-    except (asyncio.CancelledError, HTTPException):
-        discard_files(temp_path)
-        raise
-    except Exception as exc:
-        discard_files(temp_path)
-        raise HTTPException(status_code=499, detail=f"upload interrupted: {exc}")
 
-    try:
+        if direct:
+            # Bytes are already in place; a missing marker means "not received".
+            await run_io(upload_store.mark_chunk, upload_id, chunk_index)
+            return
+        if staged:
+            # Another request is writing this chunk in place: wait for it, then
+            # commit only if it did not succeed.
+            while not upload_store.claim_chunk(upload_id, chunk_index):
+                await asyncio.sleep(0.05)
+            direct = True
         await run_io(
             upload_store.commit_streamed_chunk,
             upload_id,
             chunk_index,
             temp_path,
             expected_size=expected,
-            offset=meta.chunk_size * chunk_index,
+            offset=offset,
             direct=settings.direct_upload_assembly,
         )
+    except (asyncio.CancelledError, HTTPException):
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=499, detail=f"upload interrupted: {exc}")
     finally:
-        discard_files(temp_path)
-    return JSONResponse({"ok": True, "idx": chunk_index})
+        if temp_path:
+            discard_files(temp_path)
+        if direct:
+            upload_store.release_chunk(upload_id, chunk_index)
 
 
 @router.get("/api/upload/{upload_id}/status")
@@ -358,18 +414,12 @@ async def _upload_stream(request: Request, reservation_id: str):
 
     sha256 = hashlib.sha256() if compute_checksum else None
 
-    total = 0
     try:
-        with open(temp_path, "wb", buffering=0) as out:
-            async for block in request.stream():
-                if not block:
-                    continue
-                total += len(block)
-                if expected_size >= 0 and total > expected_size:
-                    raise HTTPException(status_code=400, detail="stream upload too large")
-                if sha256:
-                    sha256.update(block)
-                await run_io(out.write, block)
+        out = await run_io(open, temp_path, "wb", buffering=0)
+        try:
+            total = await receive_into(out, request, expected_size, sha256, "stream upload too large")
+        finally:
+            await run_io(out.close)
         if expected_size >= 0 and total != expected_size:
             raise HTTPException(status_code=400, detail=f"stream size mismatch {total} != {expected_size}")
 
@@ -407,6 +457,10 @@ async def finish_upload(upload_id: str, request: Request):
 
 
 async def _finish_upload(upload_id: str, request: Request):
+    return JSONResponse(await finish_result(upload_id, request))
+
+
+async def finish_result(upload_id: str, request: Request) -> dict:
     meta = await run_io(upload_store.get_meta, upload_id)
     compute_checksum = wants_checksum(request, settings.record_upload_checksums)
     result: AssemblyResult = await run_io(upload_store.assemble, upload_id, compute_sha256=compute_checksum)
@@ -419,10 +473,10 @@ async def _finish_upload(upload_id: str, request: Request):
                 f.write(f"{result.sha256}  {os.path.basename(result.path)}\n")
         except OSError:
             pass
-    return JSONResponse({
+    return {
         "saved": result.path,
         "path": rel_path,
         "area": meta.target,
         "sha256": result.sha256,
         "checksum": checksum_info,
-    })
+    }

@@ -3,95 +3,56 @@
 Entries are keyed by the resolved absolute path and remember size and mtime.
 A file is only treated as CrossSync's own while both still match, so a file
 the user later replaced or edited under the same name is left alone.
+Rows live in the SQLite metadata store (see metadb.py).
 """
-import json
 import os
-import threading
-from typing import Dict, Iterable, List
+from typing import Iterable, List
 
-from .config import settings
-
-TRANSFER_LOG_FILE = "transfers.json"
-_lock = threading.RLock()
-
-
-def _log_path() -> str:
-    return os.path.join(settings.metadata_dir, TRANSFER_LOG_FILE)
+from . import metadb
 
 
 def _key(path: str) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
-def _read() -> Dict[str, dict]:
-    try:
-        with open(_log_path(), encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
-
-
-def _write(data: Dict[str, dict]) -> None:
-    os.makedirs(settings.metadata_dir, exist_ok=True)
-    temp = f"{_log_path()}.tmp"
-    with open(temp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-    os.replace(temp, _log_path())
-
-
 def record_transfer(area: str, full_path: str) -> None:
     stat = os.stat(full_path)
-    with _lock:
-        data = _read()
-        data[_key(full_path)] = {
-            "area": area,
-            "path": os.path.realpath(full_path),
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-        }
-        _write(data)
+    with metadb.connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO transfers (key, area, path, size, mtime_ns) VALUES (?, ?, ?, ?, ?)",
+            (_key(full_path), area, os.path.realpath(full_path), stat.st_size, stat.st_mtime_ns),
+        )
 
 
 def owned_files(area: str, base_dir: str) -> List[str]:
     """Existing files under base_dir that CrossSync saved for this area and that are unchanged."""
     base_key = _key(base_dir)
+    with metadb.connect() as conn:
+        rows = conn.execute("SELECT key, path, size, mtime_ns FROM transfers WHERE area = ?", (area,)).fetchall()
     owned = []
-    with _lock:
-        for key, entry in _read().items():
-            if entry.get("area") != area:
+    for key, path, size, mtime_ns in rows:
+        try:
+            if os.path.commonpath([key, base_key]) != base_key:
                 continue
-            try:
-                inside = os.path.commonpath([key, base_key]) == base_key
-            except ValueError:
-                inside = False
-            if not inside:
-                continue
-            path = entry.get("path", "")
-            try:
-                stat = os.stat(path)
-            except OSError:
-                continue
-            if stat.st_size == entry.get("size") and stat.st_mtime_ns == entry.get("mtime_ns"):
-                owned.append(path)
+            stat = os.stat(path)
+        except (OSError, ValueError):
+            continue
+        if stat.st_size == size and stat.st_mtime_ns == mtime_ns:
+            owned.append(path)
     return owned
 
 
 def forget_transfers(paths: Iterable[str]) -> None:
-    keys = {_key(path) for path in paths}
-    if not keys:
-        return
-    with _lock:
-        data = _read()
-        remaining = {key: value for key, value in data.items() if key not in keys}
-        if len(remaining) != len(data):
-            _write(remaining)
+    keys = [(_key(path),) for path in paths]
+    if keys:
+        with metadb.connect() as conn:
+            conn.executemany("DELETE FROM transfers WHERE key = ?", keys)
 
 
 def prune_missing() -> None:
     """Drop entries whose files no longer exist."""
-    with _lock:
-        data = _read()
-        remaining = {key: value for key, value in data.items() if os.path.exists(value.get("path", ""))}
-        if len(remaining) != len(data):
-            _write(remaining)
+    with metadb.connect() as conn:
+        paths = conn.execute("SELECT key, path FROM transfers").fetchall()
+        gone = [(key,) for key, path in paths if not os.path.exists(path)]
+        if gone:
+            conn.executemany("DELETE FROM transfers WHERE key = ?", gone)

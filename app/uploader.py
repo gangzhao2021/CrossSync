@@ -88,6 +88,7 @@ class UploadStore:
         self._fingerprints: Dict[tuple, str] = {}
         self._session_keys: Dict[str, tuple] = {}
         self._unfinished: set[str] = set()
+        self._writing: set = set()
         for sid in self.list_sessions():
             try:
                 self._index_meta(self.get_meta(sid))
@@ -253,6 +254,53 @@ class UploadStore:
             os.replace(temp, path)
             self._index_meta(meta)
 
+    # --- Direct chunk writes -------------------------------------------------
+    # A chunk is normally streamed straight into payload.bin at its offset, so
+    # each byte hits the disk once. Only a request that races another upload
+    # of the same chunk is staged in a temp file and committed after it.
+
+    @session_locked
+    def chunk_done(self, upload_id: str, idx: int) -> bool:
+        return bool(self.completion(upload_id)) or os.path.isfile(self.chunk_path(upload_id, idx))
+
+    def claim_chunk(self, upload_id: str, idx: int) -> bool:
+        """Reserve the right to write chunk idx in place; False if another request holds it."""
+        key = (str(upload_id).lower(), idx)
+        with self._activity_lock:
+            if key in self._writing:
+                return False
+            self._writing.add(key)
+            return True
+
+    def release_chunk(self, upload_id: str, idx: int) -> None:
+        with self._activity_lock:
+            self._writing.discard((str(upload_id).lower(), idx))
+
+    @session_locked
+    def open_payload_writer(self, upload_id: str, offset: int):
+        """Open payload.bin (creating it if needed) positioned at offset; the caller closes it."""
+        if not os.path.isdir(self.session_dir(upload_id)):
+            raise HTTPException(status_code=404, detail="upload not found")
+        payload = self.payload_path(upload_id)
+        if not os.path.isfile(payload):
+            with open(payload, "wb") as f:
+                f.truncate(self.get_meta(upload_id).size)
+        handle = open(payload, "r+b", buffering=0)
+        handle.seek(offset)
+        return handle
+
+    @session_locked
+    def mark_chunk(self, upload_id: str, idx: int) -> None:
+        """Record that chunk idx was written in place and verified."""
+        if not os.path.isdir(self.session_dir(upload_id)):
+            raise HTTPException(status_code=404, detail="upload not found")
+        with self._activity_lock:
+            if upload_id in self._cancelled:
+                raise HTTPException(status_code=409, detail="upload cancelled")
+        with open(self.chunk_path(upload_id, idx), "wb") as marker:
+            marker.write(b"ok")
+        self.touch(upload_id)
+
     def chunk_temp_path(self, upload_id: str, idx: int) -> str:
         return os.path.join(self.session_dir(upload_id), f"{idx:08d}.{uuid.uuid4().hex}.uploading")
 
@@ -332,10 +380,10 @@ class UploadStore:
             )
             result = AssemblyResult(path=final_path, sha256=sha)
             receipt = os.path.join(self.session_dir(upload_id), "completed.json")
+            # The atomic rename keeps the receipt consistent. It is not fsynced:
+            # losing it in a power cut only means the file is uploaded again.
             with open(receipt + ".tmp", "w", encoding="utf-8") as f:
                 json.dump(asdict(result), f)
-                f.flush()
-                os.fsync(f.fileno())
             os.replace(receipt + ".tmp", receipt)
             with self._index_lock:
                 self._unfinished.discard(upload_id)
