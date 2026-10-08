@@ -94,6 +94,9 @@ const areaState = {
     clear: $('btn-clear-dl'),
     more: $('more-actions-dl'),
     files: [],
+    total: 0,
+    // The receive folder can be a large personal folder; show the newest files only.
+    limit: 200,
     empty: '电脑接收区暂无文件',
   },
   outbox: {
@@ -113,6 +116,8 @@ const areaState = {
     clear: $('btn-clear-ob'),
     more: $('more-actions-ob'),
     files: [],
+    total: 0,
+    limit: 500,
     empty: 'iPhone 共享箱暂无文件',
   },
 };
@@ -260,6 +265,12 @@ function renderArea(area) {
     cfg.list.append(item);
   });
 
+  if (cfg.total > cfg.files.length) {
+    cfg.list.append(h('div', {
+      class: 'list-note',
+      text: `只显示最新的 ${cfg.files.length} 个，共 ${cfg.total} 个文件；打开文件夹可查看全部。`,
+    }));
+  }
   updateSelection(area);
 }
 
@@ -296,10 +307,11 @@ async function loadArea(area) {
         verifyStatusTone: file.verifyStatusTone,
       },
     ]));
-    const data = await fetchJson(`/api/list/${area}`);
-    const snapshot = JSON.stringify(data.files || []);
+    const data = await fetchJson(`/api/list/${area}?limit=${cfg.limit || 0}`);
+    const snapshot = JSON.stringify([data.total, data.files || []]);
     if (snapshot === cfg.serverSnapshot) return;
     cfg.serverSnapshot = snapshot;
+    cfg.total = data.total ?? (data.files || []).length;
     cfg.files = (data.files || []).sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path));
     cfg.files.forEach((file) => {
       const status = statusByPath.get(file.path);

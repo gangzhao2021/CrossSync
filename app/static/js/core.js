@@ -156,23 +156,54 @@ async function fileSampleSignature(file) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
+// The pending-upload list is kept in memory and written to localStorage at
+// most a few times per second. Writing it once per file made selecting a
+// large batch quadratic (500 photos meant 500 rewrites of a growing list).
+let pendingUploadsCache = null;
+let pendingUploadsFlushTimer = null;
+
 function readPendingUploads() {
-  try {
-    const parsed = JSON.parse(storeGet(PENDING_UPLOADS_KEY, '[]'));
-    if (!Array.isArray(parsed)) return [];
-    const cutoff = Date.now() - PENDING_UPLOAD_TTL_MS;
-    return parsed
-      .filter((item) => item && typeof item.id === 'string' && Number(item.updatedAt || 0) >= cutoff)
-      .slice(0, 500);
-  } catch (_) {
-    return [];
+  if (!pendingUploadsCache) {
+    try {
+      const parsed = JSON.parse(storeGet(PENDING_UPLOADS_KEY, '[]'));
+      pendingUploadsCache = Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      pendingUploadsCache = [];
+    }
   }
+  const cutoff = Date.now() - PENDING_UPLOAD_TTL_MS;
+  return pendingUploadsCache
+    .filter((item) => item && typeof item.id === 'string' && Number(item.updatedAt || 0) >= cutoff)
+    .slice(0, 500);
+}
+
+function flushPendingUploads() {
+  window.clearTimeout(pendingUploadsFlushTimer);
+  pendingUploadsFlushTimer = null;
+  if (pendingUploadsCache) storeSet(PENDING_UPLOADS_KEY, JSON.stringify(pendingUploadsCache));
 }
 
 function writePendingUploads(items) {
-  storeSet(PENDING_UPLOADS_KEY, JSON.stringify(items.slice(0, 500)));
-  renderPendingUploads();
+  pendingUploadsCache = items.slice(0, 500);
+  if (!pendingUploadsFlushTimer) pendingUploadsFlushTimer = window.setTimeout(flushPendingUploads, 250);
+  scheduleRenderPendingUploads();
 }
+
+let pendingRenderQueued = false;
+function scheduleRenderPendingUploads() {
+  if (pendingRenderQueued) return;
+  pendingRenderQueued = true;
+  queueMicrotask(() => {
+    pendingRenderQueued = false;
+    renderPendingUploads();
+  });
+}
+
+// iOS may discard a backgrounded page without warning; save before that can happen.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushPendingUploads();
+});
+window.addEventListener('pagehide', flushPendingUploads);
 
 async function rememberPendingUpload(file, target, relName) {
   let assetSignature = '';
@@ -501,6 +532,9 @@ function uploadConcurrency(missingCount) {
 // One shared pool avoids hundreds of simultaneous requests when a user picks a
 // large photo batch, while still keeping all four LAN lanes busy.
 const uploadLanePool = new UploadLanePool(Math.min(MAX_CONCURRENCY || 1, MOBILE_MAX_CONCURRENCY));
+// Preparing a file (sampling it and registering the upload) is limited too, so
+// a 500-photo selection does not fire 500 init requests at once.
+const preparePool = new UploadLanePool(6);
 
 function shouldVerifyUploadChunks() {
   return storeGet(VERIFY_KEY) === '1' && !isAppleMobile();

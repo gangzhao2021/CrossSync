@@ -336,7 +336,7 @@ function cancelServerUpload(uploadId) {
   }).catch(() => {});
 }
 
-async function uploadChunkWithRetry({ uploadId, idx, chunk, verify, task, controllers, render }) {
+async function uploadChunkWithRetry({ uploadId, idx, chunk, verify, task, controllers, render, query = '' }) {
   for (let attempt = 0; attempt < MAX_CHUNK_ATTEMPTS; attempt += 1) {
     while (task.state === 'paused') await delay(150);
     if (task.state === 'cancelled') throw new Error('cancelled');
@@ -373,7 +373,7 @@ async function uploadChunkWithRetry({ uploadId, idx, chunk, verify, task, contro
         body = buf;
       }
 
-      const res = await fetch(`/api/upload/${uploadId}/${idx}`, {
+      const res = await fetch(`/api/upload/${uploadId}/${idx}${query}`, {
         method: 'PUT',
         headers,
         body,
@@ -391,7 +391,7 @@ async function uploadChunkWithRetry({ uploadId, idx, chunk, verify, task, contro
       task.waiting = false;
       task.lastProgressAt = performance.now();
       render?.();
-      return;
+      return await res.json().catch(() => ({}));
     } catch (err) {
       if (task.state === 'cancelled') throw err;
       if (task.state === 'paused') {
@@ -468,8 +468,8 @@ function uploadFileStream({ file, target, relName, task, controllers, render }) 
 
 async function startUpload(file, target, batchId = 0) {
   const relName = buildRelName(file);
-  const pendingUpload = await rememberPendingUpload(file, target, relName);
-  const pendingUploadId = pendingUpload.id;
+  let pendingUpload = null;
+  let pendingUploadId = null;
   const ui = createTaskItem(file, target);
   const controllers = new Set();
   let fatalError = null;
@@ -479,7 +479,7 @@ async function startUpload(file, target, batchId = 0) {
     id: ++taskSeq,
     batchId,
     target,
-    pendingUploadId,
+    pendingUploadId: null,
     meter: new RateMeter(),
     networkFailed: false,
     size: file.size,
@@ -530,7 +530,12 @@ async function startUpload(file, target, batchId = 0) {
   tasks.push(task);
   renderTask(task, ui);
 
+  const releasePrepare = await preparePool.acquire();
   try {
+    if (task.state === 'cancelled') return task;
+    pendingUpload = await rememberPendingUpload(file, target, relName);
+    pendingUploadId = pendingUpload.id;
+    task.pendingUploadId = pendingUploadId;
     await wakeKeeper.requestForTransfer();
     if (shouldUseStreamUpload(file)) {
       try {
@@ -577,6 +582,7 @@ async function startUpload(file, target, batchId = 0) {
     });
 
     uploadId = initRes.upload_id;
+    releasePrepare();
     if (task.state === 'cancelled') {
       void cancelServerUpload(uploadId);
       return task;
@@ -596,6 +602,13 @@ async function startUpload(file, target, batchId = 0) {
     task.state = 'active';
     renderTask(task, ui);
 
+    const open = storeGet(OPEN_KEY) === '1';
+    const checksum = storeGet(VERIFY_KEY) === '1' && !isAppleMobile();
+    const finishQuery = `open=${open ? 1 : 0}&checksum=${checksum ? 1 : 0}`;
+    // Most photos are a single chunk: ask the server to finish in the same request.
+    const finishInline = totalChunks === 1;
+    let finishRes = null;
+
     const claimNext = () => {
       if (nextQueueIndex >= missingQueue.length) return null;
       const idx = missingQueue[nextQueueIndex];
@@ -614,7 +627,7 @@ async function startUpload(file, target, batchId = 0) {
         const chunk = file.slice(start, end);
 
         try {
-          await uploadChunkWithRetry({
+          const chunkRes = await uploadChunkWithRetry({
             uploadId,
             idx,
             chunk,
@@ -622,7 +635,9 @@ async function startUpload(file, target, batchId = 0) {
             task,
             controllers,
             render: () => renderTask(task, ui),
+            query: finishInline ? `?finish=1&${finishQuery}` : '',
           });
+          if (chunkRes?.finished) finishRes = chunkRes.finished;
           task.uploaded += end - start;
           renderTask(task, ui);
         } catch (err) {
@@ -640,11 +655,11 @@ async function startUpload(file, target, batchId = 0) {
     if (task.state === 'cancelled') return task;
     if (fatalError) throw fatalError;
 
-    task.state = 'finishing';
-    renderTask(task, ui);
-    const open = storeGet(OPEN_KEY) === '1';
-    const checksum = storeGet(VERIFY_KEY) === '1' && !isAppleMobile();
-    const finishRes = await fetchJson(`/api/finish-upload/${uploadId}?open=${open ? 1 : 0}&checksum=${checksum ? 1 : 0}`, { method: 'POST' });
+    if (!finishRes) {
+      task.state = 'finishing';
+      renderTask(task, ui);
+      finishRes = await fetchJson(`/api/finish-upload/${uploadId}?${finishQuery}`, { method: 'POST' });
+    }
 
     task.uploaded = task.size;
     task.state = 'completed';
@@ -664,6 +679,7 @@ async function startUpload(file, target, batchId = 0) {
       renderTask(task, ui);
     }
   } finally {
+    releasePrepare();
     wakeKeeper.releaseIfIdle();
   }
   return task;

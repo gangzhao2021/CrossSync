@@ -2817,3 +2817,10 @@ body.transfer-workspace-body .task-meta {
     overflow-wrap: anywhere;
   }
 }
+
+.list-note {
+  padding: 12px 4px 4px;
+  color: var(--ws-muted);
+  font-size: 12px;
+  text-align: center;
+}

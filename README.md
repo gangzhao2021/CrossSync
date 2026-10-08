@@ -70,9 +70,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 
 - iPhone → 电脑：`data/downloads`
 - 电脑 → iPhone：`data/outbox`
-- 分片临时文件：`data/temp`
-- 校验记录：`data/.crosssync/checksums.json`
-- CrossSync 传入的文件记录：`data/.crosssync/transfers.json`
+- 上传会话和正在接收的文件：`data/temp`（可用环境变量 `CROSSSYNC_TEMP_DIR` 改到别处）
+- 校验记录和 CrossSync 传入的文件记录：`data/.crosssync/crosssync.db`（SQLite；旧版的 `checksums.json`、`transfers.json` 会在首次启动时自动导入，并改名为 `*.migrated`）
 - 访问令牌和偏好设置：`data/.crosssync/preferences.json`
 
 在电脑上打开工作台，点标题下方的 **起个好记的名字** 可以给电脑改名（例如“书房电脑”），手机网页和原生 App 都会显示这个名字；留空则恢复系统名称。名称保存在 `preferences.json`。
@@ -80,6 +79,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 在电脑上打开工作台，在 **电脑接收区** 点 **更改保存位置…** 可以选择任意可写文件夹。选择会保存在 `preferences.json`，下次启动继续使用。如果设置了环境变量 `CROSSSYNC_DOWNLOADS_DIR`，它的优先级更高。
 
 默认不会在文件旁边写 `文件名.sha256`。已有的 `.sha256` 文件会在列表和打包下载中隐藏，但仍可作为旧版校验来源。为了让大文件更快可用，只有在勾选 SHA-256 选项或设置 `CROSSSYNC_RECORD_UPLOAD_CHECKSUMS=1` 时才会计算整文件校验值。如果外部工具需要旁挂文件，启动前设置 `CROSSSYNC_WRITE_SHA256=1`。
+
+## 性能建议
+
+- **把接收文件夹和临时目录放在同一块固态硬盘上。** 正在接收的文件先写在临时目录里，传完后移动到接收文件夹；两者在同一块盘上时只是改个名字，跨盘则要整份复制一遍。在机械硬盘上，4 路并发写入大文件约 30 MB/s；换到固态硬盘可达 110 MB/s 以上。临时目录可用 `CROSSSYNC_TEMP_DIR` 指定，例如在 PowerShell 里先执行 `$env:CROSSSYNC_TEMP_DIR = 'C:\CrossSync\temp'`，再运行 `.\run.ps1`。
+- 只有一个分片的小文件（大多数照片）在上传请求里直接完成，不再单独发"完成"请求。
+- "最近传输"只显示最新的 200 个文件，iPhone 共享箱显示最新的 500 个；打开文件夹可查看全部，"下载全部"不受影响。
 
 ## 删除与清空
 
@@ -114,6 +119,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 - 打包下载是边打包边传输，不会先在磁盘上生成完整的压缩包。文件以不压缩方式存入 ZIP，照片和视频本身已经压缩过。
 - 请保持默认的单进程运行：上传协调和空间预留都只在进程内生效。
 - 文件列表的刷新会合并，列表没变化时保留勾选状态，页面在后台时停止轮询。大文件复制和上传写入在请求事件循环之外执行。
+- 分片直接写入正在接收的文件对应位置，每个字节只写一次；只有同一个分片被重复并发上传时，后到的那份才先暂存，等前一份结束后再决定是否采用。
 
 ## 测试
 
@@ -133,7 +139,7 @@ node --test tests/file-list-refresh.test.cjs tests/ui-helpers.test.cjs
   - `transfers.py`：分片上传和流式上传。
   - `library.py`：文件列表、校验、下载、打包和删除。
   - `pairing.py`：扫码后通知电脑页面跳转。
-  - `uploader.py`：上传会话的存储；`transfer_log.py`：CrossSync 传入文件的记录；`checksums.py`、`common.py`、`config.py`、`utils.py`：校验、共享工具和配置。
+  - `uploader.py`：上传会话的存储；`transfer_log.py`：CrossSync 传入文件的记录；`metadb.py`：保存校验和传入记录的 SQLite 数据库；`checksums.py`、`common.py`、`config.py`、`utils.py`：校验、共享工具和配置。
   - `templates/` 和 `static/`：网页界面。浏览器端代码在 `static/js/`，是按顺序加载、共享全局作用域的四个脚本：`core.js`（状态和工具）、`wake.js`（PWA 和常亮）、`upload.js`（上传队列）、`files.js`（文件列表和启动）。静态资源地址带有根据文件内容计算的版本号，缓存会自动更新。
 - `ios/`：原生 SwiftUI 客户端，用 XcodeGen 根据 `project.yml` 生成 Xcode 工程。
 - `scripts/`：Windows 和 macOS / Linux 的 HTTPS 证书脚本，以及图标生成脚本。
