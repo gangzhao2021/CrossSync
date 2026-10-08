@@ -102,6 +102,26 @@ def set_downloads_dir(path: str, *, persist: bool = True) -> str:
     return folder
 
 
+def set_temp_dir(path: str) -> str:
+    """Save where upload sessions live. Takes effect on the next start.
+
+    Files are received here and then moved into the receive folder, so both
+    should be on the same disk; the move is then a rename, not a copy.
+    CROSSSYNC_TEMP_DIR, when set, still wins.
+    """
+    folder = os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
+    os.makedirs(folder, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".crosssync-write-test-", dir=folder):
+            pass
+    except OSError as exc:
+        raise ValueError("temp folder is not writable") from exc
+    preferences = _read_preferences()
+    preferences["temp_dir"] = folder
+    _write_preferences(preferences)
+    return folder
+
+
 DISPLAY_NAME_MAX_LENGTH = 32
 
 
@@ -171,8 +191,11 @@ def load_env_overrides():
     # Upload sessions (and, with direct assembly, the file being received) live
     # here; keep it on the same fast disk as the receive folder.
     temp = os.getenv("CROSSSYNC_TEMP_DIR")
+    saved_temp_dir = preferences.get("temp_dir")
     if temp:
         settings.temp_dir = os.path.abspath(temp)
+    elif isinstance(saved_temp_dir, str) and saved_temp_dir:
+        settings.temp_dir = os.path.abspath(saved_temp_dir)
     w = os.getenv("CROSSSYNC_WRITE_SHA256")
     if w is not None:
         settings.write_sha256_sidecar = _env_truthy(w)

@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from app import checksums, library, metadb, transfer_log
-from app.config import load_env_overrides, settings
+from app.config import load_env_overrides, set_temp_dir, settings
 
 
 class TempMetadataTestCase(unittest.TestCase):
@@ -88,6 +88,23 @@ class TempDirOverrideTests(unittest.TestCase):
             settings.metadata_dir = folder
             load_env_overrides()
             self.assertEqual(settings.temp_dir, os.path.join(folder, "fast-temp"))
+
+    def test_saved_temp_dir_is_used_and_env_var_still_wins(self):
+        saved = {key: getattr(settings, key) for key in (
+            "temp_dir", "metadata_dir", "access_token", "downloads_dir", "outbox_dir", "display_name",
+        )}
+        self.addCleanup(lambda: [setattr(settings, key, value) for key, value in saved.items()])
+        with tempfile.TemporaryDirectory() as folder:
+            settings.metadata_dir = folder
+            chosen = set_temp_dir(os.path.join(folder, "ssd-temp"))
+            self.assertTrue(os.path.isdir(chosen))
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CROSSSYNC_TEMP_DIR", None)
+                load_env_overrides()
+            self.assertEqual(settings.temp_dir, chosen)
+            with patch.dict(os.environ, {"CROSSSYNC_TEMP_DIR": os.path.join(folder, "override")}):
+                load_env_overrides()
+            self.assertEqual(settings.temp_dir, os.path.join(folder, "override"))
 
 
 if __name__ == "__main__":

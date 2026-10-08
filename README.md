@@ -70,7 +70,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 
 - iPhone → 电脑：`data/downloads`
 - 电脑 → iPhone：`data/outbox`
-- 上传会话和正在接收的文件：`data/temp`（可用环境变量 `CROSSSYNC_TEMP_DIR` 改到别处）
+- 上传会话和正在接收的文件：`data/temp`（可以保存到 `preferences.json` 的 `temp_dir`，或用环境变量 `CROSSSYNC_TEMP_DIR` 临时指定）
 - 校验记录和 CrossSync 传入的文件记录：`data/.crosssync/crosssync.db`（SQLite；旧版的 `checksums.json`、`transfers.json` 会在首次启动时自动导入，并改名为 `*.migrated`）
 - 访问令牌和偏好设置：`data/.crosssync/preferences.json`
 
@@ -82,7 +82,11 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 
 ## 性能建议
 
-- **把接收文件夹和临时目录放在同一块固态硬盘上。** 正在接收的文件先写在临时目录里，传完后移动到接收文件夹；两者在同一块盘上时只是改个名字，跨盘则要整份复制一遍。在机械硬盘上，4 路并发写入大文件约 30 MB/s；换到固态硬盘可达 110 MB/s 以上。临时目录可用 `CROSSSYNC_TEMP_DIR` 指定，例如在 PowerShell 里先执行 `$env:CROSSSYNC_TEMP_DIR = 'C:\CrossSync\temp'`，再运行 `.\run.ps1`。
+- **把接收文件夹和临时目录放在同一块固态硬盘上。** 正在接收的文件先写在临时目录里，传完后移动到接收文件夹；两者在同一块盘上时只是改个名字，跨盘则要整份复制一遍。在机械硬盘上，4 路并发写入大文件约 30 MB/s；换到固态硬盘可达 110 MB/s 以上。接收文件夹在网页上点 **更改保存位置…** 修改；临时目录用下面的命令保存一次即可（下次启动生效），环境变量 `CROSSSYNC_TEMP_DIR` 设置时优先：
+
+  ```powershell
+  .venv\Scripts\python.exe -c "from app.config import load_env_overrides, set_temp_dir; load_env_overrides(); print(set_temp_dir(r'E:\CrossSync\temp'))"
+  ```
 - 只有一个分片的小文件（大多数照片）在上传请求里直接完成，不再单独发"完成"请求。
 - "最近传输"只显示最新的 200 个文件，iPhone 共享箱显示最新的 500 个；打开文件夹可查看全部，"下载全部"不受影响。
 
