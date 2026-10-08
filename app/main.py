@@ -17,12 +17,12 @@ from contextlib import asynccontextmanager
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .config import ensure_dirs, load_env_overrides, set_downloads_dir, settings
+from .config import ensure_dirs, load_env_overrides, set_display_name, set_downloads_dir, settings
 
 load_env_overrides()
 ensure_dirs()
@@ -197,6 +197,10 @@ async def healthz():
     return JSONResponse({"ok": True})
 
 
+def computer_display_name() -> str:
+    return settings.display_name or socket.gethostname()
+
+
 def downloads_free_bytes() -> Optional[int]:
     try:
         return shutil.disk_usage(settings.downloads_dir).free
@@ -211,7 +215,9 @@ async def api_config(request: Request):
         "downloads_dir": settings.downloads_dir,
         "downloads_free_bytes": downloads_free_bytes(),
         "outbox_dir": settings.outbox_dir,
-        "computer_name": socket.gethostname(),
+        "computer_name": computer_display_name(),
+        "hostname": socket.gethostname(),
+        "has_display_name": bool(settings.display_name),
         "lan_ip": get_lan_ip(),
         "default_chunk_size": settings.default_chunk_size,
         "max_concurrency": settings.max_concurrency,
@@ -252,3 +258,17 @@ def api_pick_downloads_dir(request: Request):
         "downloads_dir": downloads_dir,
         "downloads_free_bytes": downloads_free_bytes(),
     })
+
+
+@app.post("/api/config/display-name")
+def api_set_display_name(request: Request, payload: dict = Body(...)):
+    """Rename the computer as shown to phones; an empty name falls back to the hostname."""
+    if not is_host_request(request):
+        raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上修改名称")
+    try:
+        set_display_name(payload.get("name", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"无法保存名称：{exc}")
+    return JSONResponse({"ok": True, "computer_name": computer_display_name(), "has_display_name": bool(settings.display_name)})

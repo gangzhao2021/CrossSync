@@ -45,6 +45,9 @@ class Settings:
     # LAN access control. A persistent 12-digit token is generated on first run.
     access_token: Optional[str] = None
 
+    # Friendly name shown on phones instead of the OS hostname (e.g. "书房电脑").
+    display_name: Optional[str] = None
+
 
 settings = Settings()
 
@@ -99,6 +102,31 @@ def set_downloads_dir(path: str, *, persist: bool = True) -> str:
     return folder
 
 
+DISPLAY_NAME_MAX_LENGTH = 32
+
+
+def normalize_display_name(name) -> Optional[str]:
+    """Trim a user-supplied computer name; empty means "use the hostname"."""
+    if not isinstance(name, str):
+        raise ValueError("name must be text")
+    # Control characters (newlines, tabs) become spaces, then runs of spaces collapse.
+    cleaned = " ".join("".join(ch if ch.isprintable() else " " for ch in name).split())
+    if len(cleaned) > DISPLAY_NAME_MAX_LENGTH:
+        raise ValueError(f"name must be at most {DISPLAY_NAME_MAX_LENGTH} characters")
+    return cleaned or None
+
+
+def set_display_name(name) -> Optional[str]:
+    settings.display_name = normalize_display_name(name)
+    preferences = _read_preferences()
+    if settings.display_name:
+        preferences["display_name"] = settings.display_name
+    else:
+        preferences.pop("display_name", None)
+    _write_preferences(preferences)
+    return settings.display_name
+
+
 def ensure_dirs():
     os.makedirs(settings.data_dir, exist_ok=True)
     os.makedirs(settings.downloads_dir, exist_ok=True)
@@ -123,6 +151,11 @@ def load_env_overrides():
         settings.access_token = f"{secrets.randbelow(10**12):012d}"
         preferences["access_token"] = settings.access_token
         _write_preferences(preferences)
+
+    try:
+        settings.display_name = normalize_display_name(preferences.get("display_name") or "")
+    except ValueError:
+        settings.display_name = None
 
     # Override data directories
     dl = os.getenv("CROSSSYNC_DOWNLOADS_DIR")

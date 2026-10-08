@@ -1,12 +1,17 @@
 import asyncio
 import json
+import os
+import socket
+import tempfile
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.common import is_host_address
-from app.main import api_config, api_pick_downloads_dir
+from app.config import load_env_overrides, settings
+from app.main import api_config, api_pick_downloads_dir, api_set_display_name
 
 
 def make_request(client_host: str = "127.0.0.1") -> Request:
@@ -74,6 +79,49 @@ class RuntimeConfigTests(unittest.TestCase):
         payload = json.loads(response.body)
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["cancelled"])
+
+
+class DisplayNameTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        for key, value in {"metadata_dir": folder.name, "display_name": None}.items():
+            patcher = patch.object(settings, key, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.preferences = os.path.join(folder.name, "preferences.json")
+
+    def config(self):
+        return json.loads(asyncio.run(api_config(make_request())).body)
+
+    def test_hostname_is_used_until_a_name_is_set(self):
+        payload = self.config()
+        self.assertEqual(payload["computer_name"], socket.gethostname())
+        self.assertFalse(payload["has_display_name"])
+
+    def test_rename_is_saved_cleaned_and_survives_restart(self):
+        result = json.loads(api_set_display_name(make_request(), {"name": "  书房\n电脑  "}).body)
+        self.assertEqual(result["computer_name"], "书房 电脑")
+        self.assertEqual(self.config()["computer_name"], "书房 电脑")
+        with open(self.preferences, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["display_name"], "书房 电脑")
+        settings.display_name = None
+        load_env_overrides()
+        self.assertEqual(settings.display_name, "书房 电脑")
+
+    def test_empty_name_restores_hostname(self):
+        api_set_display_name(make_request(), {"name": "客厅电脑"})
+        api_set_display_name(make_request(), {"name": "   "})
+        self.assertEqual(self.config()["computer_name"], socket.gethostname())
+
+    def test_rejects_long_names_and_lan_clients(self):
+        with self.assertRaises(HTTPException) as too_long:
+            api_set_display_name(make_request(), {"name": "x" * 33})
+        self.assertEqual(too_long.exception.status_code, 400)
+        with self.assertRaises(HTTPException) as remote:
+            api_set_display_name(make_request("192.0.2.40"), {"name": "别人的电脑"})
+        self.assertEqual(remote.exception.status_code, 403)
+        self.assertIsNone(settings.display_name)
 
 
 if __name__ == "__main__":
