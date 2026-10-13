@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import secrets
 import tempfile
 from dataclasses import dataclass
@@ -45,8 +46,15 @@ class Settings:
     # LAN access control. A persistent 12-digit token is generated on first run.
     access_token: Optional[str] = None
 
+    # Re-sending a photo that CrossSync already saved does not create "IMG (1).HEIC".
+    skip_duplicates: bool = True
+
     # Friendly name shown on phones instead of the OS hostname (e.g. "书房电脑").
     display_name: Optional[str] = None
+
+    # Advertise the computer as <mdns_name>.local so links survive IP changes.
+    mdns_enabled: bool = True
+    mdns_name: str = "crosssync"
 
 
 settings = Settings()
@@ -196,6 +204,20 @@ def load_env_overrides():
         settings.temp_dir = os.path.abspath(temp)
     elif isinstance(saved_temp_dir, str) and saved_temp_dir:
         settings.temp_dir = os.path.abspath(saved_temp_dir)
+    port = os.getenv("CROSSSYNC_PORT")
+    if port and port.isdigit():
+        settings.port = int(port)
+    mdns = os.getenv("CROSSSYNC_MDNS")
+    if mdns is not None:
+        settings.mdns_enabled = _env_truthy(mdns)
+    mdns_name = (os.getenv("CROSSSYNC_MDNS_NAME") or "").strip().lower()
+    if mdns_name:
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", mdns_name):
+            raise ValueError("CROSSSYNC_MDNS_NAME may only use letters, digits and hyphens")
+        settings.mdns_name = mdns_name
+    skip = os.getenv("CROSSSYNC_SKIP_DUPLICATES")
+    if skip is not None:
+        settings.skip_duplicates = _env_truthy(skip)
     w = os.getenv("CROSSSYNC_WRITE_SHA256")
     if w is not None:
         settings.write_sha256_sidecar = _env_truthy(w)

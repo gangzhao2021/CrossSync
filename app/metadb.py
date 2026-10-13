@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS transfers (
     area TEXT NOT NULL,
     path TEXT NOT NULL,
     size INTEGER NOT NULL,
-    mtime_ns INTEGER NOT NULL
+    mtime_ns INTEGER NOT NULL,
+    sha256 TEXT
 );
 CREATE INDEX IF NOT EXISTS transfers_by_area ON transfers(area);
 """
@@ -52,6 +53,10 @@ def _open(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(transfers)")}
+    if "sha256" not in columns:  # Databases created before duplicate detection.
+        conn.execute("ALTER TABLE transfers ADD COLUMN sha256 TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS transfers_by_size ON transfers(area, size)")
     with conn:
         _import_legacy_json(conn, os.path.dirname(path))
     return conn
@@ -119,6 +124,6 @@ def _import_legacy_json(conn: sqlite3.Connection, folder: str) -> None:
         except (KeyError, TypeError, ValueError):
             continue
     if rows:
-        conn.executemany("INSERT OR IGNORE INTO transfers VALUES (?, ?, ?, ?, ?)", rows)
+        conn.executemany("INSERT OR IGNORE INTO transfers (key, area, path, size, mtime_ns) VALUES (?, ?, ?, ?, ?)", rows)
     _retire(folder, LEGACY_CHECKSUMS)
     _retire(folder, LEGACY_TRANSFERS)

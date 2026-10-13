@@ -63,6 +63,8 @@ class AssemblyResult:
 
     path: str
     sha256: Optional[str] = None
+    # True when the bytes matched a file CrossSync already saved, so no copy was made.
+    duplicate: bool = False
 
     def is_intact(self, expected_size: int) -> bool:
         return os.path.isfile(self.path) and os.path.getsize(self.path) == expected_size
@@ -70,7 +72,7 @@ class AssemblyResult:
     @staticmethod
     def from_receipt(data: dict) -> "AssemblyResult":
         if "path" in data:
-            return AssemblyResult(path=data["path"], sha256=data.get("sha256"))
+            return AssemblyResult(path=data["path"], sha256=data.get("sha256"), duplicate=bool(data.get("duplicate")))
         # Receipts written before this format stored "path|sha256:<hex>".
         path, _, sha = str(data["result"]).partition("|sha256:")
         return AssemblyResult(path=path, sha256=sha or None)
@@ -349,7 +351,13 @@ class UploadStore:
         return UploadMeta.from_file(mp)
 
     @session_locked
-    def assemble(self, upload_id: str, compute_sha256: bool = True) -> "AssemblyResult":
+    def assemble(self, upload_id: str, compute_sha256: bool = True, find_duplicate=None) -> "AssemblyResult":
+        """Move the received payload into place and write the receipt.
+
+        find_duplicate(meta, payload_path) may return (existing_path, sha256)
+        for an identical file already received; the payload is then dropped
+        and the receipt points at the existing file.
+        """
         meta = self.get_meta(upload_id)
         with self._activity_lock:
             if upload_id in self._cancelled:
@@ -369,6 +377,14 @@ class UploadStore:
                 raise HTTPException(status_code=400, detail=f"missing chunk {idx}")
             chunk_paths.append(cp)
 
+        payload = self.payload_path(upload_id)
+        if find_duplicate and settings.direct_upload_assembly and os.path.isfile(payload):
+            match = find_duplicate(meta, payload)
+            if match:
+                existing, sha = match
+                os.remove(payload)
+                return self._record_completion(upload_id, AssemblyResult(existing, sha, duplicate=True), chunk_paths)
+
         final_path = reserve_unique_path_nested(target_dir, meta.name)
         try:
             sha = self._assemble_to_path(
@@ -378,24 +394,26 @@ class UploadStore:
                 final_path,
                 compute_sha256=compute_sha256,
             )
-            result = AssemblyResult(path=final_path, sha256=sha)
-            receipt = os.path.join(self.session_dir(upload_id), "completed.json")
-            # The atomic rename keeps the receipt consistent. It is not fsynced:
-            # losing it in a power cut only means the file is uploaded again.
-            with open(receipt + ".tmp", "w", encoding="utf-8") as f:
-                json.dump(asdict(result), f)
-            os.replace(receipt + ".tmp", receipt)
-            with self._index_lock:
-                self._unfinished.discard(upload_id)
-            self.touch(upload_id)
-            for cp in chunk_paths:
-                try:
-                    os.remove(cp)
-                except FileNotFoundError:
-                    pass
-            return result
+            return self._record_completion(upload_id, AssemblyResult(path=final_path, sha256=sha), chunk_paths)
         finally:
             release_reserved_path(final_path)
+
+    def _record_completion(self, upload_id: str, result: "AssemblyResult", chunk_paths: List[str]) -> "AssemblyResult":
+        receipt = os.path.join(self.session_dir(upload_id), "completed.json")
+        # The atomic rename keeps the receipt consistent. It is not fsynced:
+        # losing it in a power cut only means the file is uploaded again.
+        with open(receipt + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(asdict(result), f)
+        os.replace(receipt + ".tmp", receipt)
+        with self._index_lock:
+            self._unfinished.discard(upload_id)
+        self.touch(upload_id)
+        for cp in chunk_paths:
+            try:
+                os.remove(cp)
+            except FileNotFoundError:
+                pass
+        return result
 
     def _assemble_to_path(
         self,

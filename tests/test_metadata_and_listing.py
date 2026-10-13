@@ -51,6 +51,17 @@ class LegacyMetadataMigrationTests(TempMetadataTestCase):
         self.assertIn("transfers.json.migrated", names)
         self.assertNotIn("checksums.json", names)
 
+    def test_databases_from_before_duplicate_detection_gain_the_hash_column(self):
+        import sqlite3
+        old = sqlite3.connect(os.path.join(self.metadata, metadb.DB_FILE))
+        old.execute("CREATE TABLE transfers (key TEXT PRIMARY KEY, area TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL)")
+        old.commit()
+        old.close()
+        photo = self.make("a.jpg", 1_700_000_000)
+        transfer_log.record_transfer("downloads", photo, "ef" * 32)
+        with metadb.connect() as conn:
+            self.assertEqual(conn.execute("SELECT sha256 FROM transfers").fetchone()[0], "ef" * 32)
+
     def test_area_snapshot_and_deletes_are_scoped(self):
         for area in ("downloads", "outbox"):
             path = self.make(f"{area}.bin", 1_700_000_000)

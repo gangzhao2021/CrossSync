@@ -283,7 +283,9 @@ function renderTask(task, ui) {
   const speed = moving ? task.meter.rate() : 0;
   const remain = Math.max(0, task.size - task.uploaded);
   if (task.state === 'completed') {
-    ui.sizeSpan.textContent = `${formatBytes(task.size)} · 已保存`;
+    ui.sizeSpan.textContent = task.duplicate
+      ? `${formatBytes(task.size)} · 电脑上已有（${task.savedPath}），未重复保存`
+      : `${formatBytes(task.size)} · 已保存`;
   } else {
     ui.sizeSpan.textContent = `${formatBytes(task.uploaded)} / ${formatBytes(task.size)}`;
   }
@@ -304,7 +306,7 @@ function renderTask(task, ui) {
   } else if (task.state === 'active' && task.waiting) {
     ui.stateSpan.textContent = connection.online ? '网络等待' : '等待重连';
   } else {
-    ui.stateSpan.textContent = labels[task.state] || task.state;
+    ui.stateSpan.textContent = task.state === 'completed' && task.duplicate ? '已存在' : (labels[task.state] || task.state);
   }
   ui.item.classList.toggle('is-completed', task.state === 'completed');
   ui.item.classList.toggle('is-failed', task.state === 'failed');
@@ -662,6 +664,8 @@ async function startUpload(file, target, batchId = 0) {
     }
 
     task.uploaded = task.size;
+    task.duplicate = Boolean(finishRes?.duplicate);
+    task.savedPath = finishRes?.path || '';
     task.state = 'completed';
     forgetPendingUpload(pendingUploadId);
     if (finishRes?.sha256) ui.hashLine.textContent = `SHA-256: ${finishRes.sha256}`;
@@ -751,6 +755,7 @@ function showBatchResult(target, batchId) {
   if (!els.batchResult) return;
   const batch = tasks.filter((task) => task.batchId === batchId && task.state !== 'cancelled');
   const completed = batch.filter((task) => task.state === 'completed').length;
+  const duplicates = batch.filter((task) => task.state === 'completed' && task.duplicate).length;
   const failed = batch.length - completed;
   if (!batch.length) return;
   els.batchResult.dataset.batch = String(batchId);
@@ -762,17 +767,21 @@ function showBatchResult(target, batchId) {
     els.batchResultIcon.src = allDone ? '/static/icons/tabler/circle-check.svg' : '/static/icons/tabler/clock.svg';
   }
   if (els.batchResultTitle) {
-    els.batchResultTitle.textContent = allDone
-      ? `${completed} 项已保存到${where}`
-      : `已保存 ${completed} 项，${failed} 项未完成`;
+    const onlyDuplicates = allDone && duplicates === completed;
+    els.batchResultTitle.textContent = onlyDuplicates
+      ? `${completed} 项电脑上已有，无需再存`
+      : allDone
+        ? `${completed} 项已保存到${where}`
+        : `已保存 ${completed} 项，${failed} 项未完成`;
   }
   if (els.batchResultCopy) {
     const location = target === 'downloads'
       ? (runtimeConfig.isHostDevice && runtimeConfig.downloadsDir ? `保存在 ${runtimeConfig.downloadsDir}` : '可以在电脑的接收文件夹里找到。')
       : 'iPhone 打开本页后可在共享箱下载。';
+    const skipped = duplicates && duplicates < completed ? `其中 ${duplicates} 项电脑上已有，没有重复保存。` : '';
     els.batchResultCopy.textContent = allDone
-      ? location
-      : '未完成的项目会在连接恢复后自动重试，也可以在下方任务卡片里手动重试。';
+      ? `${skipped}${location}`
+      : `${skipped}未完成的项目会在连接恢复后自动重试，也可以在下方任务卡片里手动重试。`;
   }
   if (els.btnBatchOpen) els.btnBatchOpen.hidden = !runtimeConfig.isHostDevice;
   els.batchResult.hidden = false;

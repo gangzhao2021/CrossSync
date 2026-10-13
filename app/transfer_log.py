@@ -6,22 +6,57 @@ the user later replaced or edited under the same name is left alone.
 Rows live in the SQLite metadata store (see metadb.py).
 """
 import os
-from typing import Iterable, List
+from typing import Callable, Iterable, List, Optional, Tuple
 
 from . import metadb
+from .checksums import sha256_file
 
 
 def _key(path: str) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
-def record_transfer(area: str, full_path: str) -> None:
+def record_transfer(area: str, full_path: str, sha256: Optional[str] = None) -> None:
     stat = os.stat(full_path)
     with metadb.connect() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO transfers (key, area, path, size, mtime_ns) VALUES (?, ?, ?, ?, ?)",
-            (_key(full_path), area, os.path.realpath(full_path), stat.st_size, stat.st_mtime_ns),
+            "INSERT OR REPLACE INTO transfers (key, area, path, size, mtime_ns, sha256) VALUES (?, ?, ?, ?, ?, ?)",
+            (_key(full_path), area, os.path.realpath(full_path), stat.st_size, stat.st_mtime_ns, sha256),
         )
+
+
+def find_duplicate(area: str, base_dir: str, size: int, new_file: str,
+                   hash_file: Callable[[str], str] = sha256_file) -> Optional[Tuple[str, str]]:
+    """An unchanged file CrossSync saved earlier with exactly the same bytes as new_file.
+
+    Hashing only happens when a received file of the same size exists, so
+    ordinary uploads cost one indexed lookup. Hashes of earlier files are
+    computed at most once and stored.
+    """
+    base_key = _key(base_dir)
+    with metadb.connect() as conn:
+        rows = conn.execute(
+            "SELECT key, path, mtime_ns, sha256 FROM transfers WHERE area = ? AND size = ?", (area, size)
+        ).fetchall()
+    new_sha = None
+    for key, path, mtime_ns, known_sha in rows:
+        try:
+            if os.path.commonpath([key, base_key]) != base_key:
+                continue
+            stat = os.stat(path)
+        except (OSError, ValueError):
+            continue
+        if stat.st_size != size or stat.st_mtime_ns != mtime_ns:
+            continue  # Edited or replaced since CrossSync saved it.
+        if new_sha is None:
+            new_sha = hash_file(new_file)
+        if known_sha is None:
+            known_sha = hash_file(path)
+            with metadb.connect() as conn:
+                conn.execute("UPDATE transfers SET sha256 = ? WHERE key = ?", (known_sha, key))
+        if known_sha == new_sha:
+            return path, new_sha
+    return None
 
 
 def owned_files(area: str, base_dir: str) -> List[str]:

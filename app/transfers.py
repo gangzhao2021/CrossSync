@@ -101,12 +101,13 @@ def check_upload_capacity(size, target_dir, chunk_size=0, *, stream=False):
             raise HTTPException(status_code=507, detail="not enough free disk space for upload and temporary files")
 
 
-def record_saved_file(area: str, rel_path: str, full_path: str, sha: Optional[str]) -> Optional[dict]:
+def record_saved_file(area: str, rel_path: str, full_path: str, sha: Optional[str], new_file: bool = True) -> Optional[dict]:
     """Remember a file CrossSync saved, and its checksum when one was computed."""
-    try:
-        transfer_log.record_transfer(area, full_path)
-    except OSError:
-        pass
+    if new_file:
+        try:
+            transfer_log.record_transfer(area, full_path, sha)
+        except OSError:
+            pass
     if not sha:
         return None
     try:
@@ -463,9 +464,17 @@ async def _finish_upload(upload_id: str, request: Request):
 async def finish_result(upload_id: str, request: Request) -> dict:
     meta = await run_io(upload_store.get_meta, upload_id)
     compute_checksum = wants_checksum(request, settings.record_upload_checksums)
-    result: AssemblyResult = await run_io(upload_store.assemble, upload_id, compute_sha256=compute_checksum)
+    find_duplicate = None
+    if settings.skip_duplicates:
+        def find_duplicate(upload_meta, payload):
+            return transfer_log.find_duplicate(upload_meta.target, upload_meta.destination_dir(), upload_meta.size, payload)
+    result: AssemblyResult = await run_io(
+        upload_store.assemble, upload_id, compute_sha256=compute_checksum, find_duplicate=find_duplicate,
+    )
     rel_path = area_rel_path(result.path, meta.destination_dir())
-    checksum_info = await run_io(record_saved_file, meta.target, rel_path, result.path, result.sha256)
+    checksum_info = await run_io(
+        record_saved_file, meta.target, rel_path, result.path, result.sha256, not result.duplicate,
+    )
     open_folder_if_requested(request, result.path)
     if result.sha256 and settings.write_sha256_sidecar:
         try:
@@ -479,4 +488,5 @@ async def finish_result(upload_id: str, request: Request) -> dict:
         "area": meta.target,
         "sha256": result.sha256,
         "checksum": checksum_info,
+        "duplicate": result.duplicate,
     }

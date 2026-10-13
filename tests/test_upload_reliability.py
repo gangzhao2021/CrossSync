@@ -287,6 +287,44 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
             second = await self.initialize(name="second.bin", resume_key="second", size=0)
             self.assertNotEqual(second["upload_id"], sid)
 
+    async def upload_whole(self, name, data, chunk_size=4):
+        # A fresh resume key per call: a later backup, not a resume of the same selection.
+        resume_key = f"{name}-{os.urandom(4).hex()}"
+        sid = (await self.initialize(name=name, size=len(data), chunk_size=chunk_size, resume_key=resume_key))["upload_id"]
+        for idx in range(0, max(1, -(-len(data) // chunk_size))):
+            await transfers.upload_chunk(sid, idx, ChunkRequest(data[idx * chunk_size:(idx + 1) * chunk_size]))
+        return json.loads((await transfers.finish_upload(sid, Request({"type": "http", "query_string": b"", "headers": []}))).body)
+
+    async def test_resending_the_same_bytes_keeps_one_file(self):
+        first = await self.upload_whole("IMG_0001.HEIC", b"abcdefgh")
+        again = await self.upload_whole("IMG_0001 copy.HEIC", b"abcdefgh")
+        self.assertFalse(first["duplicate"])
+        self.assertTrue(again["duplicate"])
+        self.assertEqual(again["saved"], first["saved"])
+        self.assertEqual(again["path"], "IMG_0001.HEIC")
+        self.assertEqual(os.listdir(self.destination), ["IMG_0001.HEIC"])
+        self.assertFalse(any(name.endswith("payload.bin") for _, _, names in os.walk(self.temp) for name in names))
+
+    async def test_same_size_but_different_bytes_are_both_saved(self):
+        await self.upload_whole("a.jpg", b"abcdefgh")
+        other = await self.upload_whole("b.jpg", b"ABCDEFGH")
+        self.assertFalse(other["duplicate"])
+        self.assertEqual(sorted(os.listdir(self.destination)), ["a.jpg", "b.jpg"])
+
+    async def test_a_file_edited_since_it_was_saved_is_not_treated_as_a_duplicate(self):
+        first = await self.upload_whole("a.jpg", b"abcdefgh")
+        os.utime(first["saved"], (1_600_000_000, 1_600_000_000))
+        again = await self.upload_whole("a.jpg", b"abcdefgh")
+        self.assertFalse(again["duplicate"])
+        self.assertEqual(sorted(os.listdir(self.destination)), ["a (1).jpg", "a.jpg"])
+
+    async def test_duplicate_detection_can_be_turned_off(self):
+        with patch.object(settings, "skip_duplicates", False):
+            await self.upload_whole("a.jpg", b"abcdefgh")
+            again = await self.upload_whole("a.jpg", b"abcdefgh")
+        self.assertFalse(again["duplicate"])
+        self.assertEqual(len(os.listdir(self.destination)), 2)
+
     async def test_chunks_are_written_once_in_place(self):
         with patch.object(self.store, "chunk_temp_path", side_effect=AssertionError("staged a chunk")):
             sid = (await self.initialize())["upload_id"]
