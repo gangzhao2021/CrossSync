@@ -4,7 +4,9 @@ param(
   [switch]$Http,
   [switch]$RegenerateCertificate,
   [string]$AccessToken,
-  [string]$LanHost
+  [string]$LanHost,
+  # Run in the background with a tray icon; this window can be closed afterwards.
+  [switch]$Desktop
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,6 +51,18 @@ $crossSyncToken = (& $venvPython -c "from app.config import settings, load_env_o
 $mdnsName = (& $venvPython -c "from app.config import settings, load_env_overrides; load_env_overrides(); print(settings.mdns_name + '.local' if settings.mdns_enabled else '')").Trim()
 Write-Host "CrossSync native app access token: $crossSyncToken" -ForegroundColor Cyan
 
+if ($Desktop) {
+  $venvPythonw = Join-Path .venv 'Scripts/pythonw.exe'
+  $desktopArgs = @('CrossSync.pyw', '--port', "$Port")
+  if ($Http) { $desktopArgs += '--http' }
+  if ($RegenerateCertificate) {
+    & $venvPython -m app.certs --lan-host (& $venvPython -c "from app.utils import get_lan_ip; print(get_lan_ip())").Trim() --cert-dir (Join-Path $PSScriptRoot 'certs') --force
+  }
+  Start-Process -FilePath $venvPythonw -ArgumentList $desktopArgs -WorkingDirectory $PSScriptRoot
+  Write-Host 'CrossSync is running in the system tray (bottom-right). You can close this window.' -ForegroundColor Green
+  exit 0
+}
+
 # HTTPS is the default because iPhone Screen Wake Lock and PWA installation
 # require a secure context. Use -Http only as an explicit compatibility mode.
 if ($Https -and $Http) { Write-Error 'Use either -Https or -Http, not both.'; exit 1 }
@@ -65,10 +79,11 @@ if ($useHttps) {
   if (-not $certHost) {
     $certHost = (& $venvPython -c "from app.utils import get_lan_ip; print(get_lan_ip())").Trim()
   }
-  $setupHttps = Join-Path $PSScriptRoot 'scripts/setup-https.ps1'
-  if (Test-Path -LiteralPath $setupHttps) {
-    & $setupHttps -LanHost $certHost -DnsName $mdnsName -Force:$RegenerateCertificate
-  }
+  # Certificates are made in Python (no OpenSSL or Git for Windows needed).
+  $certArgs = @('-m', 'app.certs', '--lan-host', $certHost, '--cert-dir', $certDir)
+  if ($mdnsName) { $certArgs += @('--dns-name', $mdnsName) }
+  if ($RegenerateCertificate) { $certArgs += '--force' }
+  & $venvPython @certArgs
   if ((Test-Path $certFile) -and (Test-Path $keyFile)) {
     $proto = 'https'
     $uvicornArgs = @('app.main:app', '--host', '0.0.0.0', '--port', "$Port", '--ssl-certfile', $certFile, '--ssl-keyfile', $keyFile)

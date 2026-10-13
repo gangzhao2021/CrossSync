@@ -80,14 +80,14 @@ if [[ "$HTTPS" == "1" ]]; then
     CERT_HOST="$(python -c 'from app.utils import get_lan_ip; print(get_lan_ip())')"
     export CROSSSYNC_LAN_HOST="$CERT_HOST"
   fi
-  CERT_ARGS=(--lan-host "$CERT_HOST" --port "$PORT")
+  CERT_ARGS=(--lan-host "$CERT_HOST" --cert-dir certs)
   if [[ -n "$MDNS_NAME" ]]; then
     CERT_ARGS+=(--dns-name "$MDNS_NAME")
   fi
   if [[ "$REGENERATE_CERTIFICATE" == "1" ]]; then
     CERT_ARGS+=(--force)
   fi
-  bash scripts/setup-https.sh "${CERT_ARGS[@]}"
+  python -m app.certs "${CERT_ARGS[@]}"
   if [[ ! -f certs/cert.pem || ! -f certs/key.pem || ! -f certs/ca.crt ]]; then
     echo "HTTPS certificate setup did not produce the required files." >&2
     exit 1

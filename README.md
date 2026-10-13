@@ -7,7 +7,7 @@ CrossSync 是一个局域网文件传输工具，用于在 iPhone（Safari 或�
 ## 功能
 
 - **iPhone → 电脑**：在 iPhone 上选择文件，直接写入电脑上选定的接收文件夹，不需要在电脑上再下载一遍。
-- **电脑 → iPhone**：在电脑上点 **发送到 iPhone**，把文件放进 iPhone 共享箱（`data/outbox`）。iPhone 上的同一个按钮显示为 **从电脑接收**，有新文件时会出现红色数字和提示，点开即可下载。
+- **电脑 → iPhone**：在电脑上点 **发送到 iPhone**，把文件放进 iPhone 共享箱（`data/outbox`）。iPhone 上的同一个按钮显示为 **从电脑接收**，有新文件时会出现红色数字和提示。照片和视频点 **存到相册**，在 iOS 弹出的面板里选“存储图像”或“保存视频”就会进“照片”App（需要 HTTPS）；其他文件点文件名下载到“文件”App。
 - **断点续传**：iPhone 上的所有文件（包括小照片）都按分片上传。断网或浏览器被中断后，重新打开 CrossSync 并选择同样的文件，已完成的分片会自动跳过。
 - **传输时保持常亮**：有 Screen Wake Lock 时优先使用；Safari 或 HTTP 环境下退回到可见的本地循环视频。
 - **上传方式**：16 MB 分片，最多 4 路共享并发，服务器直接写入目标位置，每个分片超时后自动重试。
@@ -19,7 +19,17 @@ CrossSync 是一个局域网文件传输工具，用于在 iPhone（Safari 或�
 
 ## 快速开始
 
-### Windows
+### Windows：下载即用（推荐）
+
+在 GitHub 仓库的 **Releases** 页面下载 `CrossSync-windows.zip`，解压后双击 `CrossSync.exe`。不需要安装 Python，也不会出现终端窗口：
+
+- CrossSync 在右下角托盘里运行，右键图标可以打开工作台、显示扫码页、打开接收文件夹，勾选 **登录 Windows 时自动启动**，或退出。
+- 第一次运行会打开扫码页；Windows 可能提示“未知发布者”（程序没有代码签名），点“更多信息 → 仍要运行”，防火墙提示请允许在**专用网络**上通信。
+- 数据、证书和日志保存在 `%LOCALAPPDATA%\CrossSync`。从源码版换到这个程序时，把源码目录里的 `certs` 文件夹和 `data\.crosssync` 文件夹复制过去，就能沿用原来的访问令牌、保存位置和 iPhone 已信任的证书。
+
+自己打包：`.\scripts\build-windows.ps1` 会生成 `dist\CrossSync\CrossSync.exe` 和 `dist\CrossSync-windows.zip`；在 GitHub Actions 里运行 **Windows app** 工作流，或推送 `v1.0.0` 这样的标签，也会自动打包并发布。
+
+### Windows：从源码运行
 
 ```powershell
 .\run.ps1
@@ -32,6 +42,8 @@ Windows 默认以 HTTPS 启动，这样 iPhone 的屏幕常亮和"添加到主�
 首次以 HTTPS 运行时，会在 `certs/` 下生成私有的 `CrossSync Local CA` 和服务器证书。在 iPhone 上打开 `/ca.crt` 安装描述文件，然后到 **设置 → 通用 → 关于本机 → 证书信任设置** 中为 `CrossSync Local CA` 开启完全信任，再重新打开 CrossSync。
 
 启动脚本只会在 `requirements.txt` 变化后重新安装依赖，平时启动不再每次执行 `pip install`。
+
+不想一直开着终端窗口时，用 `.\run.ps1 -Desktop`：装好依赖后 CrossSync 转到托盘运行，这个窗口可以直接关掉。
 
 ### macOS / Linux
 
@@ -65,7 +77,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8008
 | 自定义端口 | `.\run.ps1 -Port 8010` | `./run.sh --port 8010` |
 | 手动指定局域网地址 | `.\run.ps1 -LanHost 192.168.1.20` | `./run.sh --lan-host 192.168.1.20` |
 
-请求 HTTPS 时会自动生成 `certs/cert.pem`、`certs/key.pem` 和 `certs/ca.crt`。Windows 使用 Git for Windows 自带的 OpenSSL（或其他已安装的 OpenSSL），macOS / Linux 需要 `PATH` 中有 `openssl`。如果自动检测选错了网卡，用上表中的参数手动指定局域网地址。
+请求 HTTPS 时会自动生成 `certs/cert.pem`、`certs/key.pem` 和 `certs/ca.crt`，由 Python 直接生成，不需要 OpenSSL 或 Git for Windows。也可以手动执行 `python -m app.certs --lan-host 192.168.1.20 --dns-name crosssync.local`。如果自动检测选错了网卡，用上表中的参数手动指定局域网地址。
 
 ## 用固定名称连接
 
@@ -168,9 +180,10 @@ node --test tests/file-list-refresh.test.cjs tests/ui-helpers.test.cjs
   - `uploader.py`：上传会话的存储；`transfer_log.py`：CrossSync 传入文件的记录；`metadb.py`：保存校验和传入记录的 SQLite 数据库；`checksums.py`、`common.py`、`config.py`、`utils.py`：校验、共享工具和配置。
   - `templates/` 和 `static/`：网页界面。浏览器端代码在 `static/js/`，是按顺序加载、共享全局作用域的四个脚本：`core.js`（状态和工具）、`wake.js`（PWA 和常亮）、`upload.js`（上传队列）、`files.js`（文件列表和启动）。静态资源地址带有根据文件内容计算的版本号，缓存会自动更新。
 - `ios/`：原生 SwiftUI 客户端，用 XcodeGen 根据 `project.yml` 生成 Xcode 工程。
-- `scripts/`：Windows 和 macOS / Linux 的 HTTPS 证书脚本，以及图标生成脚本。
+- `app/certs.py`：生成本地 CA 和 HTTPS 证书；`app/desktop.py` 和根目录的 `CrossSync.pyw`：托盘程序；`app/events.py`：通知页面的实时事件；`app/discovery.py`：`crosssync.local` 广播。
+- `packaging/` 和 `scripts/build-windows.ps1`：打包 Windows 程序；`scripts/generate_icons.py`：生成图标。
 - `tests/`：Python `unittest` 测试和浏览器端列表控制器的 Node 测试。
-- `.github/`：自动测试流程和 Dependabot 配置。
+- `.github/`：自动测试、打包发布 Windows 程序的流程，以及 Dependabot 配置。
 - `run.ps1` / `run.sh`：一键启动脚本，会创建 `.venv`、按需安装依赖并启动 uvicorn。
 - `data/` 和 `certs/` 在运行时生成，不会提交到仓库。
 

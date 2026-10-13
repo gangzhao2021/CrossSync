@@ -31,3 +31,8 @@ ios/CrossSyncMobile/Resources/CrossSync-Local-CA.crt
 
 # Claude Code local launch config
 .claude/launch.json
+
+# Desktop build output
+build/
+dist/
+packaging/crosssync.ico

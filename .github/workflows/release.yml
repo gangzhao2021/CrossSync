@@ -1,0 +1,49 @@
+name: Windows app
+
+# Builds CrossSync.exe (no Python needed). Run it by hand from the Actions tab,
+# or push a tag such as v1.0.0 to also publish a GitHub Release with the zip.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Run tests
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m unittest discover -s tests
+      - name: Build
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Python python
+      - name: Smoke test the packaged app
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath dist\CrossSync\CrossSync.exe -ArgumentList '--port','8017','--no-browser','--http' -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try { $ok = (Invoke-RestMethod http://127.0.0.1:8017/healthz).ok } catch {}
+          }
+          Stop-Process -Id $app.Id -Force
+          if (-not $ok) { throw 'CrossSync.exe did not start' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrossSync-windows
+          path: dist/CrossSync-windows.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/CrossSync-windows.zip --title "CrossSync ${{ github.ref_name }}" --generate-notes

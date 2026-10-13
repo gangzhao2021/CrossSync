@@ -187,11 +187,11 @@ async def service_worker():
 
 
 def ca_certificate_path() -> str:
-    return os.path.join(settings.base_dir, "certs", "ca.crt")
+    return os.path.join(settings.cert_dir, "ca.crt")
 
 
 def server_certificate_path() -> str:
-    return os.path.join(settings.base_dir, "certs", "cert.pem")
+    return os.path.join(settings.cert_dir, "cert.pem")
 
 
 def ca_certificate_available() -> bool:

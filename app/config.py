@@ -2,13 +2,25 @@ import json
 import os
 import re
 import secrets
+import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
 
 _BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-_DATA_DIR = os.path.join(_BASE_DIR, "data")
+
+
+def _home_dir() -> str:
+    """Where data/ and certs/ live: next to the code, or per user for the packaged app."""
+    if getattr(sys, "frozen", False):  # PyInstaller build: the program folder may be read-only.
+        root = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
+        return os.path.join(root, "CrossSync")
+    return _BASE_DIR
+
+
+_HOME_DIR = _home_dir()
+_DATA_DIR = os.path.join(_HOME_DIR, "data")
 
 
 @dataclass
@@ -19,6 +31,7 @@ class Settings:
     # Directories
     base_dir: str = _BASE_DIR
     data_dir: str = _DATA_DIR
+    cert_dir: str = os.path.join(_HOME_DIR, "certs")
     downloads_dir: str = os.path.join(_DATA_DIR, "downloads")
     outbox_dir: str = os.path.join(_DATA_DIR, "outbox")
     temp_dir: str = os.path.join(_DATA_DIR, "temp")
@@ -198,6 +211,9 @@ def load_env_overrides():
         settings.outbox_dir = os.path.abspath(ob)
     # Upload sessions (and, with direct assembly, the file being received) live
     # here; keep it on the same fast disk as the receive folder.
+    cert_dir = os.getenv("CROSSSYNC_CERT_DIR")
+    if cert_dir:
+        settings.cert_dir = os.path.abspath(cert_dir)
     temp = os.getenv("CROSSSYNC_TEMP_DIR")
     saved_temp_dir = preferences.get("temp_dir")
     if temp:
