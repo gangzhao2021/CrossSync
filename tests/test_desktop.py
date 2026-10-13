@@ -87,9 +87,9 @@ class PackagedPathTests(unittest.TestCase):
     def test_packaged_app_keeps_data_and_certificates_per_user(self):
         from app import config
 
-        with patch.object(sys, "frozen", True, create=True), \
-                patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\someone\AppData\Local"}):
-            self.assertEqual(config._home_dir(), r"C:\Users\someone\AppData\Local\CrossSync")
+        local = os.path.join(os.sep, "Users", "someone", "AppData", "Local")
+        with patch.object(sys, "frozen", True, create=True), patch.dict(os.environ, {"LOCALAPPDATA": local}):
+            self.assertEqual(config._home_dir(), os.path.join(local, "CrossSync"))
         with patch.object(sys, "frozen", False, create=True):
             self.assertEqual(config._home_dir(), config._BASE_DIR)
 
