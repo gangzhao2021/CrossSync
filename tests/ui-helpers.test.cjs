@@ -14,8 +14,9 @@ vm.createContext(context);
 vm.runInContext(`${source.slice(start, end)}
 this.RateMeter = RateMeter; this.isNetworkError = isNetworkError;
 this.describeError = describeError; this.formatFileTime = formatFileTime;
-this.countUnseen = countUnseen; this.transferTitle = transferTitle; this.arrivalSummary = arrivalSummary;`, context);
-const { RateMeter, isNetworkError, describeError, formatFileTime, countUnseen, transferTitle, arrivalSummary } = context;
+this.countUnseen = countUnseen; this.transferTitle = transferTitle; this.arrivalSummary = arrivalSummary;
+this.photoMimeType = photoMimeType;`, context);
+const { RateMeter, isNetworkError, describeError, formatFileTime, countUnseen, transferTitle, arrivalSummary, photoMimeType } = context;
 
 test('speed stays steady between bursty chunk completions', () => {
   const meter = new RateMeter(8000);
@@ -85,4 +86,13 @@ test('arrival notifications name the first files and mention skipped duplicates'
     '收到 IMG_1.HEIC、IMG_2.HEIC 等 3 个文件（另有 1 个已存在）',
   );
   assert.equal(arrivalSummary([{ path: 'x.jpg', duplicate: true }]), '1 个文件电脑上已有，没有重复保存');
+});
+
+test('only photos and videos are offered for the Photos app', () => {
+  assert.equal(photoMimeType('trip/IMG_0001.HEIC'), 'image/heic');
+  assert.equal(photoMimeType('a.JPG'), 'image/jpeg');
+  assert.equal(photoMimeType('clip.MOV'), 'video/quicktime');
+  assert.equal(photoMimeType('报价单.pdf'), '');
+  assert.equal(photoMimeType('archive.zip'), '');
+  assert.equal(photoMimeType('README'), '');
 });

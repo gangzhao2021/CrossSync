@@ -285,12 +285,14 @@
                 <p class="workspace-eyebrow">iPhone</p>
                 <h2>iPhone 共享箱</h2>
                 <p class="subtle label-host">放进这里的文件，iPhone 打开 CrossSync 就能下载。</p>
-                <p class="subtle label-phone">电脑发来的文件，点文件名下载到“文件”App。</p>
+                <p class="subtle label-phone">电脑发来的文件。照片和视频点“存到相册”，在弹出的面板里选“存储图像”或“保存视频”；其他文件点文件名下载到“文件”App。</p>
+                <p id="share-https-hint" class="subtle label-phone" hidden>用 HTTPS 打开 CrossSync 后，照片和视频可以直接存进相册。</p>
               </div>
               <div class="toolbar">
                 <button id="btn-outbox-add" class="btn small primary host-only" type="button">添加要发给 iPhone 的文件</button>
                 <button id="btn-open-outbox" class="icon-btn" type="button" title="打开目录" aria-label="打开目录"><img src="/static/icons/tabler/folder-open.svg" alt="" /><span class="mobile-action-label">打开目录</span></button>
                 <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /><span class="mobile-action-label">刷新</span></button>
+                <button id="btn-photos-ob-selected" class="btn small primary" type="button" disabled hidden>选中的存到相册</button>
                 <button id="btn-download-ob-selected" class="btn small" type="button" disabled>下载选中</button>
                 <button id="btn-del-ob-selected" class="btn small danger" type="button" disabled>删除选中（进回收站）</button>
                 <button id="btn-download-ob-all" class="btn small" type="button" disabled>下载全部</button>

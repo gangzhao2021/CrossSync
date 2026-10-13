@@ -136,6 +136,10 @@ function updateSelection(area) {
   if (cfg.selectedCount) cfg.selectedCount.textContent = String(count);
   if (cfg.selectedBar) cfg.selectedBar.hidden = count === 0;
   if (cfg.selectedDownload) cfg.selectedDownload.disabled = count === 0;
+  if (area === 'outbox' && els.btnPhotosSelected) {
+    els.btnPhotosSelected.hidden = !photoSaveSupported() || runtimeConfig.isHostDevice;
+    els.btnPhotosSelected.disabled = !selectedPaths(area).some((path) => photoMimeType(path));
+  }
   if (cfg.deleteSelected) cfg.deleteSelected.disabled = count === 0;
   if (cfg.deleteQuick) cfg.deleteQuick.disabled = count === 0;
   const empty = cfg.files.length === 0;
@@ -249,10 +253,17 @@ function renderArea(area) {
     });
     const verify = h('button', { class: 'btn small ghost', type: 'button', text: '校验' });
     verify.addEventListener('click', () => verifyFile(area, file, verifyStatus, verify));
-    const download = alreadyOnHost
-      ? h('span', { class: 'saved-badge', text: '已在电脑' })
-      : h('a', { class: 'btn small', href: downloadUrl(area, file.path), download: basename(file.path), text: '下载' });
-    if (!alreadyOnHost) download.addEventListener('click', () => wakeKeeper.enable('auto'));
+    let download;
+    if (alreadyOnHost) {
+      download = h('span', { class: 'saved-badge', text: '已在电脑' });
+    } else if (canOfferPhotoSave(area, file.path)) {
+      // On the iPhone, photos and videos go to the Photos app, not the Files app.
+      download = h('button', { class: 'btn small primary', type: 'button', text: '存到相册', dataset: { label: '存到相册' } });
+      download.addEventListener('click', () => void saveToPhotos(area, [file.path], download));
+    } else {
+      download = h('a', { class: 'btn small', href: downloadUrl(area, file.path), download: basename(file.path), text: '下载' });
+      download.addEventListener('click', () => wakeKeeper.enable('auto'));
+    }
 
     const item = h('div', { class: 'file-item', dataset: { path: file.path } },
       h('div', { class: 'file-row' },
@@ -646,3 +657,106 @@ document.addEventListener('visibilitychange', clearUnreadArrivals);
 window.addEventListener('focus', clearUnreadArrivals);
 renderNotifyControls();
 startLiveEvents();
+
+// --- Save photos and videos from the share box into the iPhone Photos app ---
+// Safari only offers "Save Image / Save Video" through the system share sheet,
+// and the sheet must open from a tap. Large files take a moment to arrive, so
+// the first tap downloads them and, if iOS no longer counts that as the tap,
+// the button asks for a second tap that opens the sheet straight away.
+
+const PHOTO_SAVE_LIMIT_BYTES = 1536 * 1024 * 1024; // iPhone Safari memory headroom.
+const preparedPhotos = new Map(); // "area:path" -> File
+
+function photoSaveSupported() {
+  return window.isSecureContext && typeof navigator.share === 'function' && typeof navigator.canShare === 'function';
+}
+
+function canOfferPhotoSave(area, path) {
+  return area === 'outbox' && !runtimeConfig.isHostDevice && photoSaveSupported() && Boolean(photoMimeType(path));
+}
+
+async function fetchAsFile(area, path, onProgress) {
+  const res = await fetch(downloadUrl(area, path));
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const total = Number(res.headers.get('content-length')) || 0;
+  const reader = res.body?.getReader();
+  let blob;
+  if (reader) {
+    const parts = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      received += value.length;
+      onProgress?.(received, total);
+    }
+    blob = new Blob(parts);
+  } else {
+    blob = await res.blob();
+  }
+  return new File([blob], basename(path), { type: photoMimeType(path) || blob.type });
+}
+
+async function saveToPhotos(area, paths, button) {
+  const mediaPaths = paths.filter((path) => photoMimeType(path));
+  if (!mediaPaths.length) return;
+  const keyOf = (path) => `${area}:${path}`;
+  const original = button?.dataset.label || '存到相册';
+  const setLabel = (text, busy = false) => {
+    if (!button) return;
+    button.textContent = text;
+    button.disabled = busy;
+  };
+
+  const missing = mediaPaths.filter((path) => !preparedPhotos.has(keyOf(path)));
+  if (missing.length) {
+    const sizes = new Map(areaState[area].files.map((file) => [file.path, file.size]));
+    const totalBytes = mediaPaths.reduce((sum, path) => sum + (sizes.get(path) || 0), 0);
+    if (totalBytes > PHOTO_SAVE_LIMIT_BYTES) {
+      alert('选中的文件太大，iPhone 浏览器一次装不下。请分几次保存，每次不超过 1.5 GB。');
+      return;
+    }
+    let done = 0;
+    try {
+      for (const path of missing) {
+        preparedPhotos.set(keyOf(path), await fetchAsFile(area, path, (received) => {
+          const percent = totalBytes ? Math.min(99, Math.floor(((done + received) / totalBytes) * 100)) : 0;
+          setLabel(`准备中 ${percent}%`, true);
+        }));
+        done += sizes.get(path) || 0;
+      }
+    } catch (err) {
+      setLabel(original);
+      alert(`没能从电脑取回文件：${describeError(err)}`);
+      return;
+    }
+  }
+
+  const files = mediaPaths.map((path) => preparedPhotos.get(keyOf(path)));
+  if (!navigator.canShare({ files })) {
+    setLabel(original);
+    alert('这个浏览器不能把这些文件交给“照片”。可以先点文件名下载，再从“文件”App 里存储。');
+    return;
+  }
+  try {
+    await navigator.share({ files });
+    mediaPaths.forEach((path) => preparedPhotos.delete(keyOf(path)));
+    setLabel(original);
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      setLabel(original); // The share sheet was closed; keep the files ready for another try.
+    } else if (err?.name === 'NotAllowedError') {
+      setLabel('已准备好，点此存到相册');
+    } else {
+      setLabel(original);
+      alert(`没能打开分享面板：${describeError(err)}`);
+    }
+  }
+}
+
+if (els.btnPhotosSelected) els.btnPhotosSelected.dataset.label = els.btnPhotosSelected.textContent;
+els.btnPhotosSelected?.addEventListener('click', () => {
+  void saveToPhotos('outbox', selectedPaths('outbox'), els.btnPhotosSelected);
+});
+if (els.shareHttpsHint) els.shareHttpsHint.hidden = photoSaveSupported();

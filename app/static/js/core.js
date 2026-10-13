@@ -69,6 +69,8 @@ const els = {
   btnOutboxAdd: $('btn-outbox-add'),
   chkNotify: $('chk-notify'),
   btnEnableNotify: $('btn-enable-notify'),
+  btnPhotosSelected: $('btn-photos-ob-selected'),
+  shareHttpsHint: $('share-https-hint'),
   connectionStatus: $('connection-status'),
   connectionLabel: $('connection-label'),
   batchResult: $('batch-result'),
@@ -478,6 +480,18 @@ function arrivalSummary(arrivals) {
   const more = saved.length > 2 ? ` 等 ${saved.length} 个文件` : '';
   const extra = skipped ? `（另有 ${skipped} 个已存在）` : '';
   return `收到 ${names}${more}${extra}`;
+}
+
+// Photos and videos the iPhone Photos app accepts from the share sheet.
+const PHOTO_TYPES = {
+  heic: 'image/heic', heif: 'image/heif', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  gif: 'image/gif', webp: 'image/webp', tif: 'image/tiff', tiff: 'image/tiff', dng: 'image/x-adobe-dng',
+  mov: 'video/quicktime', mp4: 'video/mp4', m4v: 'video/x-m4v', '3gp': 'video/3gpp',
+};
+
+function photoMimeType(path) {
+  const extension = String(path).split('.').pop().toLowerCase();
+  return PHOTO_TYPES[extension] || '';
 }
 
 // --- End of pure helpers ---
