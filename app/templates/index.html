@@ -3,57 +3,86 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#143d35" />
+  <meta name="theme-color" content="#07101f" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <title>CrossSync - QR</title>
+  <title>CrossSync · 扫码连接</title>
   <link rel="icon" href="/favicon.ico" />
   <link rel="apple-touch-icon" href="/static/app-icon-180.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/static/styles.css?v={{ asset_version }}" />
 </head>
-<body>
-  <main class="qr-shell">
-    <section class="qr-card">
-      <div class="brand qr-brand">
-        <div class="brand-mark">CS</div>
-        <div>
-          <h1>CrossSync</h1>
-          <p>iPhone 与 Windows/macOS 局域网互传</p>
-        </div>
+<body class="transfer-workspace-body pairing-body">
+  <main class="pairing-shell">
+    <header class="pairing-brand">
+      <img src="/static/app-icon-192.png" alt="" />
+      <strong>CrossSync</strong>
+      <span>{{ computer_name }}</span>
+    </header>
+
+    <section class="pairing-card" aria-labelledby="pairing-title">
+      <div class="pairing-qr">
+        <img id="qr-image" src="/qr.png?sid={{ sid }}" alt="用 iPhone 相机扫描的二维码" />
       </div>
-      <div class="qr-grid">
-        <div class="qr-box">
-          <img id="qr-image" src="/qr.png?sid={{ sid }}" alt="CrossSync 二维码" />
-        </div>
-        <div class="qr-copy">
-          <h2>扫码连接</h2>
-          <p>电脑与 iPhone 需要在同一个局域网内。</p>
-          <code id="qr-url">{{ lan_url }}</code>
-          {% if uses_name %}
-          <p class="qr-fallback">二维码使用固定名称，电脑换了 IP 也不用重新扫码。如果 iPhone 打不开，
-            <button id="qr-use-ip" class="inline-action" type="button">改用 IP 地址的二维码</button>。</p>
-          {% endif %}
-          <p class="otp">原生 App 访问令牌：<strong>{{ access_token }}</strong></p>
-          <a class="btn primary" href="/app">打开工作台</a>
+
+      <div class="pairing-copy">
+        <h1 id="pairing-title">用 iPhone 扫码连接</h1>
+        <ol class="pairing-steps">
+          <li>iPhone 和这台电脑连在同一个 Wi‑Fi。</li>
+          <li>打开 iPhone 相机，对准二维码，点出现的链接。</li>
           {% if ca_available and is_https %}
-          <div class="certificate-setup">
-            <strong>iPhone 首次使用 HTTPS</strong>
-            <p>先安装本地信任证书，再到“设置 → 通用 → 关于本机 → 证书信任设置”开启完全信任。</p>
-            <a class="btn" href="/ca.crt">下载 CrossSync 证书</a>
-          </div>
+          <li>第一次使用时先安装证书：在 iPhone 上打开 <a href="/ca.crt">CrossSync 证书</a>，
+            再到“设置 → 通用 → 关于本机 → 证书信任设置”打开完全信任。</li>
           {% endif %}
-        </div>
+        </ol>
+
+        <p id="qr-note" class="pairing-note">
+          {% if uses_name %}
+          二维码使用固定地址 <strong>{{ app_address }}</strong>，电脑换了 IP 也不用重新扫码。
+          <button id="qr-use-ip" class="inline-action" type="button">打不开？改用 IP 地址</button>
+          {% else %}
+          二维码地址：<strong>{{ app_address }}</strong>
+          {% endif %}
+        </p>
+
+        <details class="pairing-native">
+          <summary>原生 App 连接信息</summary>
+          <dl>
+            <dt>电脑地址</dt>
+            <dd><code id="native-address">{{ app_address }}</code></dd>
+            <dt>访问令牌</dt>
+            <dd>
+              <code id="native-token" data-token="{{ access_token }}">••••••••••••</code>
+              <button id="btn-show-token" class="inline-action" type="button">显示</button>
+              <button id="btn-copy-token" class="inline-action" type="button">复制</button>
+            </dd>
+          </dl>
+          <p>令牌相当于密码，请不要截图分享。</p>
+        </details>
+
+        <a class="btn primary pairing-open" href="/app">在这台电脑上打开工作台</a>
       </div>
     </section>
   </main>
   <script>
     const sid = "{{ sid }}";
-    // This page runs on the computer itself, so open the workbench on the same origin.
-    const redirectUrl = "/app";
-    document.getElementById('qr-use-ip')?.addEventListener('click', (event) => {
+    document.getElementById('qr-use-ip')?.addEventListener('click', () => {
       document.getElementById('qr-image').src = `/qr.png?sid=${sid}&via=ip`;
-      document.getElementById('qr-url').textContent = "{{ ip_url }}";
-      event.currentTarget.closest('.qr-fallback').textContent = '已切换为 IP 地址的二维码；电脑 IP 变化后需要重新扫码。';
+      document.getElementById('native-address').textContent = "{{ ip_address }}";
+      document.getElementById('qr-note').textContent = '已改用 IP 地址 {{ ip_address }}；电脑 IP 变化后需要重新扫码。';
+    });
+    const token = document.getElementById('native-token');
+    document.getElementById('btn-show-token')?.addEventListener('click', (event) => {
+      const shown = token.textContent === token.dataset.token;
+      token.textContent = shown ? '••••••••••••' : token.dataset.token;
+      event.currentTarget.textContent = shown ? '显示' : '隐藏';
+    });
+    document.getElementById('btn-copy-token')?.addEventListener('click', async (event) => {
+      try {
+        await navigator.clipboard.writeText(token.dataset.token);
+        event.currentTarget.textContent = '已复制';
+      } catch (_) {
+        event.currentTarget.textContent = '复制失败';
+      }
     });
     try {
       const es = new EventSource(`/api/sse/${sid}`);
@@ -61,7 +90,8 @@
       es.onmessage = (e) => {
         if (e.data === 'scanned') {
           es.close();
-          window.location.href = redirectUrl;
+          // This page runs on the computer itself: open the workbench on the same origin.
+          window.location.href = '/app';
         }
       };
     } catch (e) {}

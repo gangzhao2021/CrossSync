@@ -29,7 +29,10 @@
         </button>
         <button id="btn-send-to-iphone" class="direction-nav-item" type="button">
           <img src="/static/icons/tabler/device-mobile.svg" alt="" />
-          <span><span class="nav-label-prefix">发送</span>到 iPhone</span>
+          <!-- The computer sends to the iPhone; the iPhone receives from the computer. -->
+          <span class="label-host"><span class="nav-label-prefix">发送</span>到 iPhone</span>
+          <span class="label-phone"><span class="nav-label-prefix">从电脑</span>接收</span>
+          <span id="share-badge" class="nav-badge" hidden></span>
         </button>
         <input id="input-outbox" type="file" multiple hidden />
       </nav>
@@ -82,6 +85,12 @@
             <span id="downloads-free" class="sr-only">可用空间正在读取…</span>
           </div>
 
+          <div id="share-notice" class="share-notice" role="status" aria-live="polite" hidden>
+            <img src="/static/icons/tabler/cloud-download.svg" alt="" />
+            <span id="share-notice-text">电脑发来了新文件</span>
+            <button id="btn-share-notice" class="btn small primary" type="button">查看</button>
+          </div>
+
           <div id="dropzone-upload" class="workspace-dropzone">
             <input id="input-upload" type="file" accept="image/*,video/*" multiple hidden />
             <button id="btn-choose-upload" class="workspace-upload-action" type="button">
@@ -103,6 +112,7 @@
               <span id="drop-subtitle">返回本页后立即上传。</span>
             </div>
           </div>
+
 
           <p id="picker-note" class="picker-note" role="status" aria-live="polite" hidden></p>
 
@@ -190,6 +200,7 @@
                 <h2 id="recent-title">最近传输</h2>
               </div>
               <div class="recent-actions">
+                <button id="btn-enable-notify" class="btn small ghost" type="button" hidden>开启到达提醒</button>
                 <button id="btn-open-downloads" class="icon-btn" type="button" title="打开目录" aria-label="打开目录">
                   <img src="/static/icons/tabler/folder-open.svg" alt="" />
                 </button>
@@ -261,6 +272,7 @@
               </div>
             </div>
             <div class="option-row">
+              <label class="host-only"><input type="checkbox" id="chk-notify" /> 收到文件时桌面提醒</label>
               <label><input type="checkbox" id="chk-open" /> 完成后打开目录</label>
               <label><input type="checkbox" id="chk-date-subdir" /> 按日期归档</label>
               <label><input type="checkbox" id="chk-verify" /> SHA-256 校验</label>
@@ -269,8 +281,14 @@
 
           <section class="utility-card file-section outbox-section">
             <div class="section-head">
-              <div><p class="workspace-eyebrow">iPhone</p><h2>iPhone 共享箱</h2></div>
+              <div>
+                <p class="workspace-eyebrow">iPhone</p>
+                <h2>iPhone 共享箱</h2>
+                <p class="subtle label-host">放进这里的文件，iPhone 打开 CrossSync 就能下载。</p>
+                <p class="subtle label-phone">电脑发来的文件，点文件名下载到“文件”App。</p>
+              </div>
               <div class="toolbar">
+                <button id="btn-outbox-add" class="btn small primary host-only" type="button">添加要发给 iPhone 的文件</button>
                 <button id="btn-open-outbox" class="icon-btn" type="button" title="打开目录" aria-label="打开目录"><img src="/static/icons/tabler/folder-open.svg" alt="" /><span class="mobile-action-label">打开目录</span></button>
                 <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /><span class="mobile-action-label">刷新</span></button>
                 <button id="btn-download-ob-selected" class="btn small" type="button" disabled>下载选中</button>

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from send2trash import send2trash
 
-from . import transfer_log
+from . import events, transfer_log
 from .checksums import (
     checksum_for_file,
     checksum_snapshot,
@@ -276,6 +276,8 @@ async def api_delete(request: Request, payload: dict = Body(...)):
             raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上清空")
         targets = await run_io(transfer_log.owned_files, area, base)
         removed, failed = await run_io(trash_files, area, base, targets)
+        if removed:
+            events.publish("changed", area=area)
         return JSONResponse({"ok": not failed, "cleared": True, "deleted": len(removed), "failed": failed})
 
     targets = []
@@ -289,4 +291,6 @@ async def api_delete(request: Request, payload: dict = Body(...)):
         if os.path.isfile(full):
             targets.append(full)
     removed, failed = await run_io(trash_files, area, base, targets)
+    if removed:
+        events.publish("changed", area=area)
     return JSONResponse({"ok": not failed, "deleted": len(removed), "failed": failed})

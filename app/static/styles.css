@@ -397,20 +397,6 @@ p {
   min-width: 0;
 }
 
-.brand-mark {
-  width: 36px;
-  height: 36px;
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-  border-radius: 8px;
-  background: var(--text);
-  color: var(--panel);
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
 .brand h1 {
   font-size: 28px;
   line-height: 1.05;
@@ -932,75 +918,6 @@ html:not(.host-device) .host-only {
   color: var(--muted);
 }
 
-.qr-shell {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-
-.qr-card {
-  width: min(860px, 100%);
-  padding: 28px;
-}
-
-.qr-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 22px;
-}
-
-.qr-grid {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 28px;
-  align-items: center;
-}
-
-.qr-box {
-  display: grid;
-  place-items: center;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.qr-box img {
-  width: min(260px, 100%);
-  height: auto;
-}
-
-.qr-copy {
-  display: grid;
-  gap: 12px;
-  align-content: center;
-}
-
-.qr-copy h2 {
-  font-size: 30px;
-}
-
-.qr-copy p {
-  color: var(--muted);
-}
-
-.qr-copy code {
-  display: block;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-soft);
-  color: var(--text);
-}
-
-.otp {
-  color: var(--text) !important;
-}
-
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -1109,10 +1026,6 @@ input:focus-visible,
 
   .file-actions .btn {
     width: 100%;
-  }
-
-  .qr-grid {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -1315,22 +1228,6 @@ body {
 .selbar,
 .more-menu {
   border-radius: 12px;
-}
-
-.certificate-setup {
-  display: grid;
-  gap: 9px;
-  margin-top: 18px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--panel-soft);
-}
-
-.certificate-setup p {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 @media (max-width: 780px) {
@@ -2677,8 +2574,6 @@ body.transfer-workspace-body .task-meta {
   }
 }
 
-/* ---- Status, completion and preview refinements ---- */
-
 /* Stages that are not in use are hidden, so let the visible ones share the row. */
 .compact-stages {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -2825,8 +2720,232 @@ body.transfer-workspace-body .task-meta {
   text-align: center;
 }
 
-.qr-fallback {
-  margin: 8px 0 0;
+/* ---- Pairing (QR) page, in the workbench's look ---- */
+.pairing-body {
+  min-height: 100vh;
+}
+
+.pairing-shell {
+  width: min(880px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 56px 0 40px;
+}
+
+.pairing-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  color: var(--ws-muted);
+}
+
+.pairing-brand img {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+}
+
+.pairing-brand strong {
+  color: var(--ws-text);
+  font-size: 20px;
+}
+
+.pairing-brand span::before {
+  content: "·";
+  margin-right: 12px;
+}
+
+.pairing-card {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 36px;
+  padding: 32px;
+  border: 1px solid var(--ws-line);
+  border-radius: 18px;
+  background: var(--ws-surface);
+  box-shadow: var(--ws-shadow);
+}
+
+.pairing-qr {
+  align-self: start;
+  padding: 16px;
+  border-radius: 14px;
+  background: #fff; /* QR codes need a light, high-contrast background in both themes. */
+}
+
+.pairing-qr img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.pairing-copy h1 {
+  margin: 0 0 16px;
+  font-size: 28px;
+}
+
+.pairing-steps {
+  margin: 0 0 18px;
+  padding-left: 20px;
+  color: var(--ws-text);
+  line-height: 1.8;
+}
+
+.pairing-steps a {
+  color: var(--ws-blue);
+}
+
+.pairing-note {
+  margin: 0 0 18px;
+  color: var(--ws-muted);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.7;
+}
+
+.pairing-note strong {
+  color: var(--ws-text);
+}
+
+.pairing-native {
+  margin-bottom: 22px;
+  padding: 12px 14px;
+  border: 1px solid var(--ws-line-soft);
+  border-radius: 12px;
+  color: var(--ws-muted);
+  font-size: 13px;
+}
+
+.pairing-native summary {
+  cursor: pointer;
+  color: var(--ws-text);
+  font-weight: 700;
+}
+
+.pairing-native dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 14px;
+  margin: 12px 0 8px;
+}
+
+.pairing-native dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.pairing-native code {
+  color: var(--ws-text);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.pairing-native p {
+  margin: 0;
+}
+
+.pairing-open {
+  display: inline-flex;
+}
+
+@media (max-width: 720px) {
+  .pairing-shell {
+    padding-top: 28px;
+  }
+
+  .pairing-card {
+    grid-template-columns: 1fr;
+    gap: 22px;
+    padding: 20px;
+  }
+
+  .pairing-qr {
+    width: min(280px, 100%);
+    justify-self: center;
+  }
+}
+
+/* ---- Computer vs iPhone wording, share-box badge and notice ---- */
+.label-phone {
+  display: none;
+}
+
+html:not(.host-device) .label-host {
+  display: none;
+}
+
+html:not(.host-device) span.label-phone {
+  display: inline;
+}
+
+html:not(.host-device) p.label-phone {
+  display: block;
+}
+
+/* Keeping the screen awake only matters on the iPhone. */
+.host-device .workspace-footer {
+  display: none;
+}
+
+.direction-nav-item {
+  position: relative;
+}
+
+.nav-badge {
+  min-width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--ws-danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+}
+
+.share-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--ws-blue) 55%, transparent);
+  border-radius: 12px;
+  background: var(--ws-surface);
+  color: var(--ws-text);
+  font-weight: 700;
+}
+
+.share-notice img {
+  width: 22px;
+  height: 22px;
+  filter: brightness(0) saturate(100%) invert(48%) sepia(93%) saturate(2410%) hue-rotate(205deg) brightness(101%);
+}
+
+.share-notice span {
+  flex: 1;
+}
+
+.share-notice {
+  margin: 0 0 18px;
+}
+
+@media (max-width: 720px) {
+  .nav-badge {
+    min-width: 18px;
+    height: 18px;
+    margin-left: 2px;
+    padding: 0 5px;
+    font-size: 10px;
+    line-height: 18px;
+  }
+}
+
+.direction-nav-item .label-phone,
+.direction-nav-item .label-host {
+  white-space: nowrap;
 }

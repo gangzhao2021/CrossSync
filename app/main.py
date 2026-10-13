@@ -27,7 +27,7 @@ from .config import ensure_dirs, load_env_overrides, set_display_name, set_downl
 load_env_overrides()
 ensure_dirs()
 
-from . import library, pairing, transfer_log, transfers  # noqa: E402  (need settings loaded first)
+from . import events, library, pairing, transfer_log, transfers  # noqa: E402  (need settings loaded first)
 from .common import is_host_request, run_io  # noqa: E402
 from .discovery import REFRESH_SECONDS, advertiser, certificate_covers  # noqa: E402
 from .utils import folder_picker_available, get_lan_ip, pick_folder  # noqa: E402
@@ -89,6 +89,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 app.include_router(transfers.router)
 app.include_router(library.router)
 app.include_router(pairing.router)
+app.include_router(events.router)
 
 
 def phone_host(request: Request) -> str:
@@ -147,13 +148,16 @@ async def access_gate(request: Request, call_next):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     sid = uuid.uuid4().hex
-    host, url = app_url_for_request(request, sid)
+    host = phone_host(request)
     ip = get_lan_ip()
-    _, ip_url = app_url_for_request(request, sid, host=ip)
+    port = request.url.port or settings.port
     return templates.TemplateResponse(request, "index.html", {
-        "lan_url": url,
-        "ip_url": ip_url if host != ip else "",
+        # The QR image carries the full link with the token; the page itself
+        # only shows the short address, so the token is not on screen.
+        "app_address": f"{host}:{port}",
+        "ip_address": f"{ip}:{port}",
         "uses_name": host != ip,
+        "computer_name": computer_display_name(),
         "access_token": settings.access_token,
         "sid": sid,
         "ca_available": ca_certificate_available(),

@@ -179,6 +179,9 @@ function updateSummary() {
   if (els.sumFailed) els.sumFailed.textContent = String(failed);
   if (els.sumSpeed) els.sumSpeed.textContent = speedText;
   if (els.sumEta) els.sumEta.textContent = uploading > 0 ? formatEta(eta) : '—';
+  titleState.active = active;
+  titleState.percent = total > 0 ? Math.min(100, (uploaded / total) * 100) : 0;
+  updateDocumentTitle();
   const pct = total > 0 ? Math.min(100, (uploaded / total) * 100) : 0;
   if (els.sumBar) {
     els.sumBar.style.width = `${pct.toFixed(2)}%`;
@@ -584,6 +587,7 @@ async function startUpload(file, target, batchId = 0) {
     });
 
     uploadId = initRes.upload_id;
+    ownUploadIds.add(String(uploadId).toLowerCase());
     releasePrepare();
     if (task.state === 'cancelled') {
       void cancelServerUpload(uploadId);
@@ -905,7 +909,9 @@ els.btnPickToResume?.addEventListener('click', () => {
 renderPendingUploads();
 
 if (els.btnSendToIphone && els.inputOutbox) {
-  els.btnSendToIphone.addEventListener('click', () => els.inputOutbox.click());
+  // The computer sends files to the iPhone; the iPhone receives them. Both open the share box.
+  els.btnSendToIphone.addEventListener('click', () => openShareBox());
+  els.btnOutboxAdd?.addEventListener('click', () => els.inputOutbox.click());
   els.inputOutbox.addEventListener('change', (event) => {
     handleFiles(event.target.files, 'outbox');
     els.inputOutbox.value = '';

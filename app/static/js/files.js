@@ -265,6 +265,7 @@ function renderArea(area) {
     cfg.list.append(item);
   });
 
+  if (area === 'outbox') updateShareNotice();
   if (cfg.total > cfg.files.length) {
     cfg.list.append(h('div', {
       class: 'list-note',
@@ -511,3 +512,137 @@ window.addEventListener('beforeunload', (event) => {
   event.preventDefault();
   event.returnValue = '';
 });
+
+// --- iPhone share box: what the computer sent, as seen from the phone ---
+
+function shareSeenMtime() {
+  return Number(storeGet(SHARE_SEEN_KEY, '0')) || 0;
+}
+
+function markShareSeen() {
+  const newest = Math.max(0, ...areaState.outbox.files.map((file) => Number(file.mtime) || 0));
+  if (newest > shareSeenMtime()) storeSet(SHARE_SEEN_KEY, String(newest));
+}
+
+function updateShareNotice() {
+  if (!runtimeConfig.isHostDevice && els.utilityDrawer?.open) markShareSeen();
+  const unseen = runtimeConfig.isHostDevice ? 0 : countUnseen(areaState.outbox.files, shareSeenMtime());
+  if (els.shareBadge) {
+    els.shareBadge.hidden = unseen === 0;
+    els.shareBadge.textContent = unseen > 99 ? '99+' : String(unseen);
+  }
+  if (els.shareNotice) {
+    els.shareNotice.hidden = unseen === 0;
+    if (els.shareNoticeText) els.shareNoticeText.textContent = `电脑发来 ${unseen} 个新文件`;
+  }
+}
+
+function openShareBox() {
+  setUtilityDrawer(true);
+  window.setTimeout(() => document.querySelector('.outbox-section')?.scrollIntoView({ block: 'start' }), 60);
+  updateShareNotice();
+  void refreshArea('outbox');
+}
+
+els.btnShareNotice?.addEventListener('click', () => openShareBox());
+
+// --- Live events: instant list refresh, arrival notifications on the computer ---
+
+const announcedUploads = new Set();
+let pendingArrivals = [];
+let arrivalTimer = null;
+
+function notificationsAllowed() {
+  return 'Notification' in window && Notification.permission === 'granted' && storeGet(NOTIFY_KEY) === '1';
+}
+
+function renderNotifyControls() {
+  const supported = 'Notification' in window;
+  if (els.chkNotify) {
+    els.chkNotify.disabled = !supported;
+    els.chkNotify.checked = supported && notificationsAllowed();
+  }
+  if (els.btnEnableNotify) {
+    els.btnEnableNotify.hidden = !supported || !runtimeConfig.isHostDevice
+      || Notification.permission === 'denied' || notificationsAllowed();
+  }
+}
+
+async function enableNotifications() {
+  if (!('Notification' in window)) return false;
+  const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  storeSet(NOTIFY_KEY, permission === 'granted' ? '1' : '0');
+  if (permission !== 'granted') {
+    alert('浏览器没有允许通知。可以在地址栏左侧的站点设置里打开“通知”。');
+  }
+  renderNotifyControls();
+  return permission === 'granted';
+}
+
+els.chkNotify?.addEventListener('change', async () => {
+  if (els.chkNotify.checked) {
+    await enableNotifications();
+  } else {
+    storeSet(NOTIFY_KEY, '0');
+    renderNotifyControls();
+  }
+});
+els.btnEnableNotify?.addEventListener('click', () => void enableNotifications());
+
+function flushArrivals() {
+  const arrivals = pendingArrivals;
+  pendingArrivals = [];
+  if (!arrivals.length) return;
+  const away = document.hidden || !document.hasFocus();
+  if (!away) return; // The list on screen already shows them.
+  titleState.unread += arrivals.length;
+  updateDocumentTitle();
+  if (notificationsAllowed()) {
+    const note = new Notification('CrossSync', {
+      body: arrivalSummary(arrivals),
+      tag: 'crosssync-arrival',
+      icon: '/static/app-icon-192.png',
+    });
+    note.onclick = () => {
+      window.focus();
+      note.close();
+    };
+  }
+}
+
+function handleLiveEvent(event) {
+  if (!['downloads', 'outbox'].includes(event?.area)) return;
+  void refreshArea(event.area);
+  if (event.type !== 'received') return;
+  const id = event.upload_id || '';
+  if (id && announcedUploads.has(id)) return; // A retried finish repeats the event.
+  if (id) announcedUploads.add(id);
+  if (id && ownUploadIds.has(id)) return; // This page sent it.
+  if (event.area === 'downloads' && runtimeConfig.isHostDevice) {
+    pendingArrivals.push(event);
+    window.clearTimeout(arrivalTimer);
+    arrivalTimer = window.setTimeout(flushArrivals, 1500);
+  }
+}
+
+function startLiveEvents() {
+  if (!('EventSource' in window)) return;
+  const source = new EventSource('/api/events');
+  source.onmessage = (message) => {
+    try {
+      handleLiveEvent(JSON.parse(message.data));
+    } catch (_) {}
+  };
+  // EventSource reconnects on its own; the health check reports the connection state.
+}
+
+function clearUnreadArrivals() {
+  if (document.hidden || !titleState.unread) return;
+  titleState.unread = 0;
+  updateDocumentTitle();
+}
+
+document.addEventListener('visibilitychange', clearUnreadArrivals);
+window.addEventListener('focus', clearUnreadArrivals);
+renderNotifyControls();
+startLiveEvents();

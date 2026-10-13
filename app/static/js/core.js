@@ -10,6 +10,9 @@ const DATE_SUBDIR_KEY = 'crosssync_date_subdir';
 const VERIFY_KEY = 'crosssync_verify_chunks';
 const CLIENT_ID_KEY = 'crosssync_client_id';
 const PENDING_UPLOADS_KEY = 'crosssync_pending_uploads_v1';
+const SHARE_SEEN_KEY = 'crosssync_share_seen_mtime';
+const NOTIFY_KEY = 'crosssync_notify_arrivals';
+const BASE_TITLE = 'CrossSync · 本地传输';
 const PENDING_UPLOAD_TTL_MS = 48 * 60 * 60 * 1000;
 const MOBILE_CHUNK_SIZE = 16 * 1024 * 1024;
 const MOBILE_MAX_CONCURRENCY = 4;
@@ -59,6 +62,13 @@ const els = {
   computerName: $('computer-name'),
   computerNameHeading: $('computer-name-heading'),
   btnRenameComputer: $('btn-rename-computer'),
+  shareBadge: $('share-badge'),
+  shareNotice: $('share-notice'),
+  shareNoticeText: $('share-notice-text'),
+  btnShareNotice: $('btn-share-notice'),
+  btnOutboxAdd: $('btn-outbox-add'),
+  chkNotify: $('chk-notify'),
+  btnEnableNotify: $('btn-enable-notify'),
   connectionStatus: $('connection-status'),
   connectionLabel: $('connection-label'),
   batchResult: $('batch-result'),
@@ -119,6 +129,9 @@ const runtimeConfig = {
   configError: false,
 };
 let taskSeq = 0;
+// Uploads started by this page, so live "received" events for them are not announced back.
+const ownUploadIds = new Set();
+const titleState = { active: 0, percent: 0, unread: 0 };
 const claimedPendingUploadIds = new Set();
 
 function storeGet(key, fallback = '') {
@@ -376,6 +389,11 @@ function formatEta(seconds) {
 
 // --- Pure helpers (no DOM); covered by tests/ui-helpers.test.cjs ---
 
+function basename(path) {
+  return String(path).split('/').filter(Boolean).pop() || path;
+}
+
+
 // Transfer speed over a sliding window, so bursty chunk completions and very
 // frequent re-renders do not make the number jump to zero.
 class RateMeter {
@@ -439,14 +457,37 @@ function formatFileTime(seconds, now = new Date()) {
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+// Files in the iPhone share box that arrived after the phone last looked.
+function countUnseen(files, seenMtime) {
+  return (files || []).filter((file) => Number(file.mtime) > seenMtime).length;
+}
+
+// Tab title: progress while this page transfers, otherwise unread arrivals.
+function transferTitle({ active, percent, unread }) {
+  if (active > 0) return `${Math.floor(percent)}% 传输中 · CrossSync`;
+  if (unread > 0) return `(${unread}) 收到新文件 · CrossSync`;
+  return BASE_TITLE;
+}
+
+// One line for a desktop notification about files that just arrived.
+function arrivalSummary(arrivals) {
+  const saved = arrivals.filter((item) => !item.duplicate);
+  const skipped = arrivals.length - saved.length;
+  if (!saved.length) return `${skipped} 个文件电脑上已有，没有重复保存`;
+  const names = saved.slice(0, 2).map((item) => basename(item.path)).join('、');
+  const more = saved.length > 2 ? ` 等 ${saved.length} 个文件` : '';
+  const extra = skipped ? `（另有 ${skipped} 个已存在）` : '';
+  return `收到 ${names}${more}${extra}`;
+}
+
 // --- End of pure helpers ---
+
+function updateDocumentTitle() {
+  document.title = transferTitle(titleState);
+}
 
 function encodePath(path) {
   return String(path).split('/').map(encodeURIComponent).join('/');
-}
-
-function basename(path) {
-  return String(path).split('/').filter(Boolean).pop() || path;
 }
 
 async function fetchJson(url, options) {

@@ -305,6 +305,16 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(os.listdir(self.destination), ["IMG_0001.HEIC"])
         self.assertFalse(any(name.endswith("payload.bin") for _, _, names in os.walk(self.temp) for name in names))
 
+    async def test_finished_uploads_announce_themselves_to_open_pages(self):
+        with patch.object(transfers.events, "publish") as publish:
+            first = await self.upload_whole("IMG_1.HEIC", b"abcdefgh")
+            await self.upload_whole("IMG_1 again.HEIC", b"abcdefgh")
+        kinds = [(call.args[0], call.kwargs["path"], call.kwargs["duplicate"]) for call in publish.call_args_list]
+        self.assertEqual(kinds, [("received", "IMG_1.HEIC", False), ("received", "IMG_1.HEIC", True)])
+        self.assertEqual(publish.call_args_list[0].kwargs["area"], "downloads")
+        self.assertTrue(publish.call_args_list[0].kwargs["upload_id"])
+        self.assertTrue(first["saved"])
+
     async def test_same_size_but_different_bytes_are_both_saved(self):
         await self.upload_whole("a.jpg", b"abcdefgh")
         other = await self.upload_whole("b.jpg", b"ABCDEFGH")

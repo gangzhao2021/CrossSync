@@ -9,12 +9,13 @@ const source = fs.readFileSync(path.join(__dirname, '../app/static/js/core.js'),
 const start = source.indexOf('// --- Pure helpers');
 const end = source.indexOf('// --- End of pure helpers ---');
 assert.ok(start >= 0 && end > start, 'helper markers must exist in core.js');
-const context = { performance: { now: () => 0 } };
+const context = { performance: { now: () => 0 }, BASE_TITLE: 'CrossSync · 本地传输' };
 vm.createContext(context);
 vm.runInContext(`${source.slice(start, end)}
 this.RateMeter = RateMeter; this.isNetworkError = isNetworkError;
-this.describeError = describeError; this.formatFileTime = formatFileTime;`, context);
-const { RateMeter, isNetworkError, describeError, formatFileTime } = context;
+this.describeError = describeError; this.formatFileTime = formatFileTime;
+this.countUnseen = countUnseen; this.transferTitle = transferTitle; this.arrivalSummary = arrivalSummary;`, context);
+const { RateMeter, isNetworkError, describeError, formatFileTime, countUnseen, transferTitle, arrivalSummary } = context;
 
 test('speed stays steady between bursty chunk completions', () => {
   const meter = new RateMeter(8000);
@@ -62,4 +63,26 @@ test('file times use Chinese relative dates', () => {
   assert.equal(formatFileTime(at(2026, 9, 7, 9, 5), now), '昨天 09:05');
   assert.equal(formatFileTime(at(2026, 2, 1, 18, 30), now), '3月1日 18:30');
   assert.equal(formatFileTime(at(2025, 11, 31, 8, 0), now), '2025年12月31日');
+});
+
+test('the phone counts share-box files newer than the last look', () => {
+  const files = [{ mtime: 100 }, { mtime: 200 }, { mtime: 300 }];
+  assert.equal(countUnseen(files, 0), 3);
+  assert.equal(countUnseen(files, 200), 1);
+  assert.equal(countUnseen([], 0), 0);
+});
+
+test('the tab title shows progress first, then unread arrivals', () => {
+  assert.equal(transferTitle({ active: 2, percent: 45.8, unread: 3 }), '45% 传输中 · CrossSync');
+  assert.equal(transferTitle({ active: 0, percent: 100, unread: 3 }), '(3) 收到新文件 · CrossSync');
+  assert.equal(transferTitle({ active: 0, percent: 0, unread: 0 }), 'CrossSync · 本地传输');
+});
+
+test('arrival notifications name the first files and mention skipped duplicates', () => {
+  assert.equal(arrivalSummary([{ path: 'a/IMG_1.HEIC' }]), '收到 IMG_1.HEIC');
+  assert.equal(
+    arrivalSummary([{ path: 'IMG_1.HEIC' }, { path: 'IMG_2.HEIC' }, { path: 'IMG_3.HEIC' }, { path: 'IMG_4.HEIC', duplicate: true }]),
+    '收到 IMG_1.HEIC、IMG_2.HEIC 等 3 个文件（另有 1 个已存在）',
+  );
+  assert.equal(arrivalSummary([{ path: 'x.jpg', duplicate: true }]), '1 个文件电脑上已有，没有重复保存');
 });

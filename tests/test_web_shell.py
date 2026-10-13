@@ -6,8 +6,10 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import json
+
 import app.main as main
-from app import pairing
+from app import events, pairing
 
 
 class AssetVersionTests(unittest.TestCase):
@@ -23,6 +25,41 @@ class AssetVersionTests(unittest.TestCase):
         self.assertIn(f"crosssync-shell-{version}", worker)
         self.assertNotIn("__ASSET_VERSION__", worker)
         self.assertNotIn("figma", page.lower())
+
+    def test_pairing_page_does_not_print_the_token_link(self):
+        with patch.object(main.settings, "mdns_enabled", False), TestClient(main.app) as client:
+            page = client.get("/", headers={"Authorization": f"Bearer {main.settings.access_token}"}).text
+        self.assertNotIn("?k=", page)
+        self.assertNotIn(f">{main.settings.access_token}<", page)  # Only revealed on demand.
+        self.assertIn("/qr.png?sid=", page)
+
+
+class LiveEventTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        patcher = patch.object(events, "_subscribers", set())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_published_events_reach_open_pages(self):
+        response = await events.events()
+        stream = response.body_iterator
+        self.assertEqual(await stream.__anext__(), "retry: 3000\n\n")
+        pending = asyncio.ensure_future(stream.__anext__())
+        await asyncio.sleep(0)
+        events.publish("received", area="downloads", path="IMG_1.HEIC", size=4, duplicate=False, upload_id="ab")
+        message = await asyncio.wait_for(pending, 2)
+        self.assertEqual(json.loads(message[len("data: "):]), {
+            "type": "received", "area": "downloads", "path": "IMG_1.HEIC", "size": 4, "duplicate": False, "upload_id": "ab",
+        })
+        await stream.aclose()
+        self.assertEqual(events._subscribers, set())
+
+    async def test_too_many_open_pages_are_refused(self):
+        for _ in range(events.MAX_SUBSCRIBERS):
+            events._subscribers.add(asyncio.Queue())
+        with self.assertRaises(HTTPException) as caught:
+            await events.events()
+        self.assertEqual(caught.exception.status_code, 429)
 
 
 class ScanEventTests(unittest.IsolatedAsyncioTestCase):

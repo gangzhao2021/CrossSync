@@ -11,7 +11,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import transfer_log
+from . import events, transfer_log
 from .checksums import record_checksum
 from .common import (
     area_rel_path,
@@ -439,6 +439,7 @@ async def _upload_stream(request: Request, reservation_id: str):
     checksum_info = await run_io(record_saved_file, target, rel_path, final_path, sha)
     open_folder_if_requested(request, final_path)
     release_reserved_path(final_path)
+    events.publish("received", area=target, path=rel_path, size=total, duplicate=False, upload_id=None)
     return JSONResponse({
         "saved": final_path,
         "path": rel_path,
@@ -482,6 +483,11 @@ async def finish_result(upload_id: str, request: Request) -> dict:
                 f.write(f"{result.sha256}  {os.path.basename(result.path)}\n")
         except OSError:
             pass
+    # Retried finishes repeat the event; pages ignore upload ids they have seen.
+    events.publish(
+        "received", area=meta.target, path=rel_path, size=meta.size,
+        duplicate=result.duplicate, upload_id=str(upload_id).lower(),
+    )
     return {
         "saved": result.path,
         "path": rel_path,
