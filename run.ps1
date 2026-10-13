@@ -43,7 +43,10 @@ if ($installedHash -ne $requirementsHash) {
 if ($AccessToken) { $env:CROSSSYNC_ACCESS_TOKEN = $AccessToken }
 if ($LanHost) { $env:CROSSSYNC_LAN_HOST = $LanHost }
 
+$env:CROSSSYNC_PORT = "$Port"
 $crossSyncToken = (& $venvPython -c "from app.config import settings, load_env_overrides; load_env_overrides(); print(settings.access_token)").Trim()
+# The stable LAN name (e.g. crosssync.local) goes into the certificate too.
+$mdnsName = (& $venvPython -c "from app.config import settings, load_env_overrides; load_env_overrides(); print(settings.mdns_name + '.local' if settings.mdns_enabled else '')").Trim()
 Write-Host "CrossSync native app access token: $crossSyncToken" -ForegroundColor Cyan
 
 # HTTPS is the default because iPhone Screen Wake Lock and PWA installation
@@ -64,7 +67,7 @@ if ($useHttps) {
   }
   $setupHttps = Join-Path $PSScriptRoot 'scripts/setup-https.ps1'
   if (Test-Path -LiteralPath $setupHttps) {
-    & $setupHttps -LanHost $certHost -Force:$RegenerateCertificate
+    & $setupHttps -LanHost $certHost -DnsName $mdnsName -Force:$RegenerateCertificate
   }
   if ((Test-Path $certFile) -and (Test-Path $keyFile)) {
     $proto = 'https'

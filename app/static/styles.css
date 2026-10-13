@@ -2824,3 +2824,9 @@ body.transfer-workspace-body .task-meta {
   font-size: 12px;
   text-align: center;
 }
+
+.qr-fallback {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+}

@@ -24,6 +24,12 @@ from app.utils import file_fingerprint, safe_join
 
 
 class AccessControlTests(unittest.TestCase):
+    def setUp(self):
+        # Starting the app must not advertise on the real network during tests.
+        patcher = patch.object(settings, "mdns_enabled", False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_lan_api_requires_token(self):
         with patch.object(settings, "access_token", "123456789012"):
             with TestClient(app) as client:

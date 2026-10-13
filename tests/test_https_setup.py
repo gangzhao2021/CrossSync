@@ -50,6 +50,18 @@ class PosixHTTPSSetupTests(unittest.TestCase):
             decoded = ssl._ssl._test_decode_cert(str(cert_dir / "cert.pem"))
             self.assertIn(("IP Address", "192.168.50.10"), decoded["subjectAltName"])
 
+    def test_certificate_includes_the_stable_lan_name(self):
+        with tempfile.TemporaryDirectory(prefix="crosssync-certs-") as temp_dir:
+            cert_dir = Path(temp_dir)
+            self.run_setup(cert_dir, "192.168.50.10", "--dns-name", "crosssync.local")
+            names = ssl._ssl._test_decode_cert(str(cert_dir / "cert.pem"))["subjectAltName"]
+            self.assertIn(("DNS", "crosssync.local"), names)
+            self.assertIn(("IP Address", "192.168.50.10"), names)
+            first = (cert_dir / "cert.pem").read_bytes()
+            # Same host and name: the certificate is kept.
+            self.run_setup(cert_dir, "192.168.50.10", "--dns-name", "crosssync.local")
+            self.assertEqual((cert_dir / "cert.pem").read_bytes(), first)
+
     def test_force_rotates_ca(self):
         with tempfile.TemporaryDirectory(prefix="crosssync-certs-") as temp_dir:
             cert_dir = Path(temp_dir)

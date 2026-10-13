@@ -23,14 +23,18 @@
       </div>
       <div class="qr-grid">
         <div class="qr-box">
-          <img src="/qr.png?sid={{ sid }}" alt="CrossSync QR code" />
+          <img id="qr-image" src="/qr.png?sid={{ sid }}" alt="CrossSync 二维码" />
         </div>
         <div class="qr-copy">
           <h2>扫码连接</h2>
           <p>电脑与 iPhone 需要在同一个局域网内。</p>
-          <code>{{ lan_url }}</code>
+          <code id="qr-url">{{ lan_url }}</code>
+          {% if uses_name %}
+          <p class="qr-fallback">二维码使用固定名称，电脑换了 IP 也不用重新扫码。如果 iPhone 打不开，
+            <button id="qr-use-ip" class="inline-action" type="button">改用 IP 地址的二维码</button>。</p>
+          {% endif %}
           <p class="otp">原生 App 访问令牌：<strong>{{ access_token }}</strong></p>
-          <a class="btn primary" href="{{ lan_url }}">打开工作台</a>
+          <a class="btn primary" href="/app">打开工作台</a>
           {% if ca_available and is_https %}
           <div class="certificate-setup">
             <strong>iPhone 首次使用 HTTPS</strong>
@@ -44,7 +48,13 @@
   </main>
   <script>
     const sid = "{{ sid }}";
-    const redirectUrl = "{{ lan_url }}";
+    // This page runs on the computer itself, so open the workbench on the same origin.
+    const redirectUrl = "/app";
+    document.getElementById('qr-use-ip')?.addEventListener('click', (event) => {
+      document.getElementById('qr-image').src = `/qr.png?sid=${sid}&via=ip`;
+      document.getElementById('qr-url').textContent = "{{ ip_url }}";
+      event.currentTarget.closest('.qr-fallback').textContent = '已切换为 IP 地址的二维码；电脑 IP 变化后需要重新扫码。';
+    });
     try {
       const es = new EventSource(`/api/sse/${sid}`);
       es.addEventListener('expired', () => es.close());

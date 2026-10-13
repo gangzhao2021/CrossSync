@@ -66,7 +66,10 @@ if [[ -n "$LAN_HOST" ]]; then
   export CROSSSYNC_LAN_HOST="$LAN_HOST"
 fi
 
+export CROSSSYNC_PORT="$PORT"
 CROSSSYNC_TOKEN="$(python -c 'from app.config import settings, load_env_overrides; load_env_overrides(); print(settings.access_token)')"
+# The stable LAN name (e.g. crosssync.local) goes into the certificate too.
+MDNS_NAME="$(python -c 'from app.config import settings, load_env_overrides; load_env_overrides(); print(settings.mdns_name + ".local" if settings.mdns_enabled else "")')"
 echo "CrossSync native app access token: $CROSSSYNC_TOKEN"
 
 PROTO=http
@@ -78,6 +81,9 @@ if [[ "$HTTPS" == "1" ]]; then
     export CROSSSYNC_LAN_HOST="$CERT_HOST"
   fi
   CERT_ARGS=(--lan-host "$CERT_HOST" --port "$PORT")
+  if [[ -n "$MDNS_NAME" ]]; then
+    CERT_ARGS+=(--dns-name "$MDNS_NAME")
+  fi
   if [[ "$REGENERATE_CERTIFICATE" == "1" ]]; then
     CERT_ARGS+=(--force)
   fi

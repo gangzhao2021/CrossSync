@@ -2,6 +2,7 @@
 set -euo pipefail
 
 LAN_HOST=""
+DNS_NAME=""
 PORT=8008
 FORCE=0
 
@@ -9,6 +10,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --lan-host)
       LAN_HOST="${2:?missing LAN host or IP}"
+      shift 2
+      ;;
+    --dns-name)
+      DNS_NAME="${2:?missing DNS name}"
       shift 2
       ;;
     --force)
@@ -20,7 +25,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      echo "Usage: bash scripts/setup-https.sh --lan-host 192.168.1.20 [--port 8008] [--force]"
+      echo "Usage: bash scripts/setup-https.sh --lan-host 192.168.1.20 [--dns-name crosssync.local] [--port 8008] [--force]"
       exit 0
       ;;
     *)
@@ -86,11 +91,15 @@ if [[ -f "$HOST_MARKER" ]]; then
   CURRENT_HOST="$(tr -d '\r\n' < "$HOST_MARKER")"
 fi
 
-if [[ "$CURRENT_HOST" != "$LAN_HOST" || ! -f "$SERVER_KEY" || ! -f "$SERVER_CERT" ]]; then
+WANTED_HOSTS="$LAN_HOST${DNS_NAME:+ $DNS_NAME}"
+if [[ "$CURRENT_HOST" != "$WANTED_HOSTS" || ! -f "$SERVER_KEY" || ! -f "$SERVER_CERT" ]]; then
   if [[ "$LAN_HOST" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ || "$LAN_HOST" == *:* ]]; then
     HOST_SAN="IP.2 = $LAN_HOST"
   else
     HOST_SAN="DNS.2 = $LAN_HOST"
+  fi
+  if [[ -n "$DNS_NAME" && "$DNS_NAME" != "$LAN_HOST" ]]; then
+    HOST_SAN="$HOST_SAN"$'\n'"DNS.3 = $DNS_NAME"
   fi
 
   cat > "$SERVER_CONFIG" <<EOF
@@ -117,7 +126,7 @@ EOF
   openssl genrsa -out "$SERVER_KEY" 2048
   openssl req -new -key "$SERVER_KEY" -out "$SERVER_CSR" -config "$SERVER_CONFIG"
   openssl x509 -req -in "$SERVER_CSR" -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial -out "$SERVER_CERT" -days 825 -sha256 -extfile "$SERVER_CONFIG" -extensions v3_req
-  printf '%s\n' "$LAN_HOST" > "$HOST_MARKER"
+  printf '%s\n' "$WANTED_HOSTS" > "$HOST_MARKER"
 fi
 
 chmod 600 "$CA_KEY" "$SERVER_KEY" 2>/dev/null || true

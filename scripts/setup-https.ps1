@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$LanHost,
+  # Extra DNS name for the certificate, e.g. crosssync.local (mDNS).
+  [string]$DnsName = '',
   [switch]$Force
 )
 
@@ -51,13 +53,15 @@ if (-not (Test-Path -LiteralPath $caKey) -or -not (Test-Path -LiteralPath $caCer
   if ($LASTEXITCODE -ne 0) { throw 'Failed to generate the CrossSync CA certificate.' }
 }
 
+$wantedHosts = "$LanHost $DnsName".Trim()
 $currentHost = if (Test-Path -LiteralPath $hostMarker) { (Get-Content -Raw -LiteralPath $hostMarker).Trim() } else { '' }
-$needsServerCertificate = $currentHost -ne $LanHost -or -not (Test-Path -LiteralPath $serverKey) -or -not (Test-Path -LiteralPath $serverCert)
+$needsServerCertificate = $currentHost -ne $wantedHosts -or -not (Test-Path -LiteralPath $serverKey) -or -not (Test-Path -LiteralPath $serverCert)
 
 if ($needsServerCertificate) {
   $address = $null
   $isIp = [System.Net.IPAddress]::TryParse($LanHost, [ref]$address)
   $hostSan = if ($isIp) { "IP.2 = $LanHost" } else { "DNS.2 = $LanHost" }
+  if ($DnsName -and $DnsName -ne $LanHost) { $hostSan += "`nDNS.3 = $DnsName" }
   $config = @"
 [req]
 default_bits = 2048
@@ -88,7 +92,7 @@ $hostSan
   if ($LASTEXITCODE -ne 0) { throw 'Failed to generate the HTTPS certificate request.' }
   & $openssl x509 -req -in $serverCsr -CA $caCert -CAkey $caKey -CAcreateserial -out $serverCert -days 825 -sha256 -extfile $configFile -extensions v3_req
   if ($LASTEXITCODE -ne 0) { throw 'Failed to sign the HTTPS server certificate.' }
-  Set-Content -LiteralPath $hostMarker -Value $LanHost -Encoding ASCII
+  Set-Content -LiteralPath $hostMarker -Value $wantedHosts -Encoding ASCII
 }
 
 foreach ($path in @($serverCsr, $configFile)) {

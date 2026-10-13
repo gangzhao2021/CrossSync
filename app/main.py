@@ -29,6 +29,7 @@ ensure_dirs()
 
 from . import library, pairing, transfer_log, transfers  # noqa: E402  (need settings loaded first)
 from .common import is_host_request, run_io  # noqa: E402
+from .discovery import REFRESH_SECONDS, advertiser, certificate_covers  # noqa: E402
 from .utils import folder_picker_available, get_lan_ip, pick_folder  # noqa: E402
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -64,11 +65,23 @@ async def lifespan(_: FastAPI):
                 pass
             await asyncio.sleep(3600)
 
+    async def discovery_loop():
+        await advertiser.start()
+        while True:
+            await asyncio.sleep(REFRESH_SECONDS)
+            try:
+                await advertiser.refresh()
+            except Exception:
+                pass
+
     cleanup_task = asyncio.create_task(cleanup_loop())
+    discovery_task = asyncio.create_task(discovery_loop())
     try:
         yield
     finally:
         cleanup_task.cancel()
+        discovery_task.cancel()
+        await advertiser.stop()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -78,8 +91,16 @@ app.include_router(library.router)
 app.include_router(pairing.router)
 
 
-def app_url_for_request(request: Request, sid: Optional[str] = None):
-    host_ip = get_lan_ip()
+def phone_host(request: Request) -> str:
+    """The host name phones should use: the stable .local name when it works, else the LAN IP."""
+    if advertiser.active:
+        if request.url.scheme != "https" or certificate_covers(server_certificate_path(), advertiser.hostname):
+            return advertiser.hostname
+    return get_lan_ip()
+
+
+def app_url_for_request(request: Request, sid: Optional[str] = None, host: Optional[str] = None):
+    host = host or phone_host(request)
     scheme = request.url.scheme or "http"
     port = request.url.port or settings.port
     params = {}
@@ -88,7 +109,7 @@ def app_url_for_request(request: Request, sid: Optional[str] = None):
     if sid:
         params["sid"] = sid
     query = f"?{urlencode(params)}" if params else ""
-    return host_ip, f"{scheme}://{host_ip}:{port}/app{query}"
+    return host, f"{scheme}://{host}:{port}/app{query}"
 
 
 @app.middleware("http")
@@ -126,9 +147,13 @@ async def access_gate(request: Request, call_next):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     sid = uuid.uuid4().hex
-    _, url = app_url_for_request(request, sid)
+    host, url = app_url_for_request(request, sid)
+    ip = get_lan_ip()
+    _, ip_url = app_url_for_request(request, sid, host=ip)
     return templates.TemplateResponse(request, "index.html", {
         "lan_url": url,
+        "ip_url": ip_url if host != ip else "",
+        "uses_name": host != ip,
         "access_token": settings.access_token,
         "sid": sid,
         "ca_available": ca_certificate_available(),
@@ -161,6 +186,10 @@ def ca_certificate_path() -> str:
     return os.path.join(settings.base_dir, "certs", "ca.crt")
 
 
+def server_certificate_path() -> str:
+    return os.path.join(settings.base_dir, "certs", "cert.pem")
+
+
 def ca_certificate_available() -> bool:
     return os.path.isfile(ca_certificate_path())
 
@@ -176,7 +205,9 @@ async def ca_certificate():
 async def qr_png(request: Request):
     import qrcode
 
-    _, url = app_url_for_request(request, request.query_params.get("sid"))
+    # ?via=ip renders the fallback code for networks where .local names do not resolve.
+    host = get_lan_ip() if request.query_params.get("via") == "ip" else None
+    _, url = app_url_for_request(request, request.query_params.get("sid"), host=host)
     buf = io.BytesIO()
     qrcode.make(url).save(buf, format="PNG")
     buf.seek(0)

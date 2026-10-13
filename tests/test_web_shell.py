@@ -12,7 +12,7 @@ from app import pairing
 
 class AssetVersionTests(unittest.TestCase):
     def test_pages_and_service_worker_share_asset_version(self):
-        with TestClient(main.app) as client:
+        with patch.object(main.settings, "mdns_enabled", False), TestClient(main.app) as client:
             headers = {"Authorization": f"Bearer {main.settings.access_token}"}
             page = client.get("/app", headers=headers).text
             worker = client.get("/sw.js").text
