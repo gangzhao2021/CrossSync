@@ -325,6 +325,45 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
         again = await self.upload_whole("notes copy.txt", b"abcdefgh")
         self.assertTrue(again["duplicate"])
 
+    async def ask_duplicate(self, **payload):
+        return json.loads((await transfers.check_duplicate({"target": "downloads", **payload})).body)
+
+    async def test_phone_can_skip_uploading_a_file_the_computer_already_has(self):
+        first = await self.upload_whole("IMG_2.HEIC", b"abcdefgh")
+        self.assertTrue((await self.ask_duplicate(size=8))["possible"])
+        self.assertFalse((await self.ask_duplicate(size=9))["possible"])  # No saved file of that size: no hashing.
+
+        with patch.object(transfers.events, "publish") as publish:
+            found = await self.ask_duplicate(size=8, sha256=hashlib.sha256(b"abcdefgh").hexdigest())
+        self.assertTrue(found["duplicate"])
+        self.assertEqual((found["path"], found["saved"]), ("IMG_2.HEIC", first["saved"]))
+        self.assertTrue(publish.call_args.kwargs["duplicate"])  # The computer still announces it.
+
+        other = await self.ask_duplicate(size=8, sha256=hashlib.sha256(b"ABCDEFGH").hexdigest())
+        self.assertFalse(other["duplicate"])
+        self.assertEqual(os.listdir(self.destination), ["IMG_2.HEIC"])
+
+    async def test_duplicate_questions_respect_the_setting_and_reject_bad_input(self):
+        await self.upload_whole("a.jpg", b"abcdefgh")
+        with patch.object(settings, "skip_duplicates", False):
+            self.assertFalse((await self.ask_duplicate(size=8))["possible"])
+        for bad in ({"size": "x"}, {"size": 8, "sha256": "not-a-hash"}, {"size": 8, "target": "elsewhere"}, {}):
+            with self.assertRaises(HTTPException):
+                await self.ask_duplicate(**bad)
+
+    async def test_forgotten_upload_resumes_by_content_sample(self):
+        sample = hashlib.sha256(b"head+tail").hexdigest()
+        first = await self.initialize(resume_key="first-selection", sample_signature=sample)
+        await transfers.upload_chunk(first["upload_id"], 0, ChunkRequest(b"abcd"))
+        # Site data cleared: a new resume key, but the same content.
+        again = await self.initialize(resume_key="after-clearing", sample_signature=sample)
+        self.assertTrue(again["resumed"])
+        self.assertEqual(again["upload_id"], first["upload_id"])
+        self.assertEqual(again["missing"], [1])
+        # Different content of the same size starts fresh.
+        other = await self.initialize(resume_key="other", sample_signature=hashlib.sha256(b"x").hexdigest())
+        self.assertFalse(other["resumed"])
+
     async def test_same_size_but_different_bytes_are_both_saved(self):
         await self.upload_whole("a.jpg", b"abcdefgh")
         other = await self.upload_whole("b.jpg", b"ABCDEFGH")

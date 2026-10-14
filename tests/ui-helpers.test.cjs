@@ -15,8 +15,8 @@ vm.runInContext(`${source.slice(start, end)}
 this.RateMeter = RateMeter; this.isNetworkError = isNetworkError;
 this.describeError = describeError; this.formatFileTime = formatFileTime;
 this.countUnseen = countUnseen; this.transferTitle = transferTitle; this.arrivalSummary = arrivalSummary;
-this.photoMimeType = photoMimeType;`, context);
-const { RateMeter, isNetworkError, describeError, formatFileTime, countUnseen, transferTitle, arrivalSummary, photoMimeType } = context;
+this.photoMimeType = photoMimeType; this.Sha256 = Sha256; this.sha256Hex = sha256Hex;`, context);
+const { RateMeter, isNetworkError, describeError, formatFileTime, countUnseen, transferTitle, arrivalSummary, photoMimeType, Sha256, sha256Hex } = context;
 
 test('speed stays steady between bursty chunk completions', () => {
   const meter = new RateMeter(8000);
@@ -95,4 +95,22 @@ test('only photos and videos are offered for the Photos app', () => {
   assert.equal(photoMimeType('报价单.pdf'), '');
   assert.equal(photoMimeType('archive.zip'), '');
   assert.equal(photoMimeType('README'), '');
+});
+
+test('the built-in SHA-256 matches Node at every padding boundary', () => {
+  const crypto = require('node:crypto');
+  for (const length of [0, 1, 55, 56, 57, 63, 64, 65, 119, 120, 1000, 70000]) {
+    const data = crypto.randomBytes(length);
+    assert.equal(sha256Hex(new Uint8Array(data)), crypto.createHash('sha256').update(data).digest('hex'), `length ${length}`);
+  }
+});
+
+test('hashing in uneven slices gives the same result as all at once', () => {
+  const crypto = require('node:crypto');
+  const data = crypto.randomBytes(300000);
+  const hash = new Sha256();
+  for (let offset = 0, step = 1; offset < data.length; offset += step, step = (step * 7) % 9973 + 1) {
+    hash.update(new Uint8Array(data.subarray(offset, offset + step)));
+  }
+  assert.equal(hash.hex(), crypto.createHash('sha256').update(data).digest('hex'));
 });

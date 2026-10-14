@@ -25,20 +25,13 @@ def record_transfer(area: str, full_path: str, sha256: Optional[str] = None) -> 
         )
 
 
-def find_duplicate(area: str, base_dir: str, size: int, new_file: str,
-                   hash_file: Callable[[str], str] = sha256_file) -> Optional[Tuple[str, str]]:
-    """An unchanged file CrossSync saved earlier with exactly the same bytes as new_file.
-
-    Hashing only happens when a received file of the same size exists, so
-    ordinary uploads cost one indexed lookup. Hashes of earlier files are
-    computed at most once and stored.
-    """
+def _same_size_files(area: str, base_dir: str, size: int):
+    """(key, path, known_sha) of unchanged files CrossSync saved here with this size."""
     base_key = _key(base_dir)
     with metadb.connect() as conn:
         rows = conn.execute(
             "SELECT key, path, mtime_ns, sha256 FROM transfers WHERE area = ? AND size = ?", (area, size)
         ).fetchall()
-    new_sha = None
     for key, path, mtime_ns, known_sha in rows:
         try:
             if os.path.commonpath([key, base_key]) != base_key:
@@ -48,13 +41,44 @@ def find_duplicate(area: str, base_dir: str, size: int, new_file: str,
             continue
         if stat.st_size != size or stat.st_mtime_ns != mtime_ns:
             continue  # Edited or replaced since CrossSync saved it.
+        yield key, path, known_sha
+
+
+def _known_sha(key: str, path: str, known_sha: Optional[str], hash_file: Callable[[str], str]) -> str:
+    if known_sha is None:
+        known_sha = hash_file(path)
+        with metadb.connect() as conn:
+            conn.execute("UPDATE transfers SET sha256 = ? WHERE key = ?", (known_sha, key))
+    return known_sha
+
+
+def has_same_size(area: str, base_dir: str, size: int) -> bool:
+    """Whether a duplicate is possible at all; a phone only hashes a file when this is true."""
+    return next(_same_size_files(area, base_dir, size), None) is not None
+
+
+def find_by_sha(area: str, base_dir: str, size: int, sha256: str,
+                hash_file: Callable[[str], str] = sha256_file) -> Optional[str]:
+    """Path of an unchanged saved file with this size and SHA-256, checked before uploading."""
+    for key, path, known_sha in _same_size_files(area, base_dir, size):
+        if _known_sha(key, path, known_sha, hash_file) == sha256:
+            return path
+    return None
+
+
+def find_duplicate(area: str, base_dir: str, size: int, new_file: str,
+                   hash_file: Callable[[str], str] = sha256_file) -> Optional[Tuple[str, str]]:
+    """An unchanged file CrossSync saved earlier with exactly the same bytes as new_file.
+
+    Hashing only happens when a received file of the same size exists, so
+    ordinary uploads cost one indexed lookup. Hashes of earlier files are
+    computed at most once and stored.
+    """
+    new_sha = None
+    for key, path, known_sha in _same_size_files(area, base_dir, size):
         if new_sha is None:
             new_sha = hash_file(new_file)
-        if known_sha is None:
-            known_sha = hash_file(path)
-            with metadb.connect() as conn:
-                conn.execute("UPDATE transfers SET sha256 = ? WHERE key = ?", (known_sha, key))
-        if known_sha == new_sha:
+        if _known_sha(key, path, known_sha, hash_file) == new_sha:
             return path, new_sha
     return None
 

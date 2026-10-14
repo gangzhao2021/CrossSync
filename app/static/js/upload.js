@@ -340,7 +340,10 @@ function renderTask(task, ui) {
     failed: '失败',
     cancelled: '已取消',
   };
-  if (task.state === 'active' && task.retrying) {
+  if (task.checking) {
+    const pct = task.size ? Math.floor(((task.checkedBytes || 0) / task.size) * 100) : 0;
+    ui.stateSpan.textContent = `检查电脑上是否已有 ${pct}%`;
+  } else if (task.state === 'active' && task.retrying) {
     ui.stateSpan.textContent = `重试中 ${task.retrying}/${MAX_CHUNK_ATTEMPTS}`;
   } else if (task.state === 'active' && task.waiting) {
     ui.stateSpan.textContent = connection.online ? '网络等待' : '等待重连';
@@ -507,6 +510,38 @@ function uploadFileStream({ file, target, relName, task, controllers, render }) 
   });
 }
 
+// Ask the computer before sending: if it already has these exact bytes, skip
+// the upload. Only files whose size matches a saved file are hashed, so most
+// uploads cost one small request. Any problem here just means "upload it".
+async function findExistingCopy(file, target, task, render) {
+  if (!file.size) return null;
+  const ask = (extra) => fetchJson('/api/duplicates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target, size: file.size, ...extra }),
+  });
+  try {
+    const first = await ask({});
+    if (!first.possible) return null;
+    task.checking = true;
+    task.uploaded = 0;
+    render();
+    const sha256 = await hashFile(file, {
+      onProgress: (done) => {
+        task.checkedBytes = done;
+        render();
+      },
+      cancelled: () => task.state === 'cancelled',
+    });
+    const answer = await ask({ sha256 });
+    return answer.duplicate ? answer : null;
+  } catch (_) {
+    return null;
+  } finally {
+    task.checking = false;
+  }
+}
+
 async function startUpload(file, target, batchId = 0) {
   const relName = buildRelName(file);
   let pendingUpload = null;
@@ -578,6 +613,18 @@ async function startUpload(file, target, batchId = 0) {
     pendingUploadId = pendingUpload.id;
     task.pendingUploadId = pendingUploadId;
     await wakeKeeper.requestForTransfer();
+    const existingCopy = await findExistingCopy(file, target, task, () => renderTask(task, ui));
+    if (task.state === 'cancelled') return task;
+    if (existingCopy) {
+      task.uploaded = task.size;
+      task.duplicate = true;
+      task.savedPath = existingCopy.path || '';
+      task.state = 'completed';
+      forgetPendingUpload(pendingUploadId);
+      renderTask(task, ui);
+      refreshArea(target);
+      return task;
+    }
     if (shouldUseStreamUpload(file)) {
       try {
         task.state = 'active';
@@ -618,6 +665,7 @@ async function startUpload(file, target, batchId = 0) {
         last_modified: file.lastModified,
         client_id: browserClientId(),
         resume_key: pendingUpload.resumeKey,
+        sample_signature: pendingUpload.assetSignature || '',
         target,
       }),
     });

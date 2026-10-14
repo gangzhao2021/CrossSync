@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -33,6 +34,7 @@ from .uploader import (
 from .utils import file_fingerprint, legacy_file_fingerprint
 
 router = APIRouter()
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 # Request bodies arrive in ~64 KB blocks; batching them into 1 MB writes means
 # one worker-thread hop per megabyte instead of sixteen.
 WRITE_BATCH_BYTES = 1024 * 1024
@@ -147,6 +149,39 @@ def wants_finish(request: Request) -> bool:
     return request.query_params.get("finish") in {"1", "true", "yes"}
 
 
+@router.post("/api/duplicates")
+async def check_duplicate(payload: dict = Body(...)):
+    """Ask before uploading whether the computer already has this file.
+
+    Without sha256: is a duplicate possible at all (a saved file of the same
+    size)? The phone only hashes the file when it is. With sha256: the saved
+    file with exactly those bytes, so the phone can skip the upload.
+    """
+    return JSONResponse(await run_io(duplicate_answer, payload))
+
+
+def duplicate_answer(payload) -> dict:
+    try:
+        target = payload.get("target", "downloads")
+        size = int(payload["size"])
+        sha = str(payload.get("sha256") or "").lower()
+        if target not in ("downloads", "outbox") or size < 0 or (sha and not SHA256_HEX.match(sha)):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="invalid payload")
+    if not settings.skip_duplicates or size == 0:
+        return {"enabled": settings.skip_duplicates, "possible": False, "duplicate": False}
+    base_dir = area_dir(target)
+    if not sha:
+        return {"enabled": True, "possible": transfer_log.has_same_size(target, base_dir, size), "duplicate": False}
+    path = transfer_log.find_by_sha(target, base_dir, size, sha)
+    if not path:
+        return {"enabled": True, "possible": True, "duplicate": False}
+    rel_path = area_rel_path(path, base_dir)
+    events.publish("received", area=target, path=rel_path, size=size, duplicate=True, upload_id=None)
+    return {"enabled": True, "possible": True, "duplicate": True, "path": rel_path, "saved": path, "sha256": sha}
+
+
 @router.post("/api/init-upload")
 async def init_upload(payload: dict = Body(...)):
     return await run_io(initialize_upload, payload)
@@ -171,6 +206,8 @@ def _initialize_upload(payload):
             last_modified = None  # Only a hint; never reject an upload over it.
         client_id = str(payload.get("client_id") or "")
         resume_key = str(payload.get("resume_key") or "")
+        sample = str(payload.get("sample_signature") or "").lower()
+        sample = sample if SHA256_HEX.match(sample) else None
         if target not in ("downloads", "outbox"):
             raise ValueError("invalid target")
         if size < 0 or size > settings.max_file_size:
@@ -191,6 +228,13 @@ def _initialize_upload(payload):
     if not existing and resume_key:
         legacy_fingerprint = legacy_file_fingerprint(name, size, last_modified, client_id, resume_key)
         existing = upload_store.find_by_fingerprint(legacy_fingerprint, target=target)
+        if existing:
+            existing.fingerprint = fingerprint
+            upload_store.update_meta(existing)
+    if not existing and sample:
+        # The phone forgot this upload (site data cleared, another browser), but
+        # the same content was half sent before: carry on from those chunks.
+        existing = upload_store.find_unfinished_by_sample(target, size, sample)
         if existing:
             existing.fingerprint = fingerprint
             upload_store.update_meta(existing)
@@ -216,6 +260,7 @@ def _initialize_upload(payload):
         received={},
         target_dir=target_dir,
         last_modified=last_modified,
+        sample_signature=sample,
     )
     upload_store.init_session(meta)
     return JSONResponse({

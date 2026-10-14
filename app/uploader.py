@@ -45,6 +45,8 @@ class UploadMeta:
     target_dir: Optional[str] = None
     # The phone's file time in milliseconds, used when the file has no capture time.
     last_modified: Optional[int] = None
+    # SHA-256 of the first and last 64 KB, to find this upload again by content.
+    sample_signature: Optional[str] = None
 
     def destination_dir(self) -> str:
         return self.target_dir or area_dir(self.target)
@@ -91,6 +93,7 @@ class UploadStore:
         self._index_lock = threading.RLock()
         self._fingerprints: Dict[tuple, str] = {}
         self._session_keys: Dict[str, tuple] = {}
+        self._samples: Dict[str, tuple] = {}  # upload_id -> (target, size, sample_signature)
         self._unfinished: set[str] = set()
         self._writing: set = set()
         for sid in self.list_sessions():
@@ -108,6 +111,8 @@ class UploadStore:
                 self._fingerprints.pop(previous, None)
             self._session_keys[meta.upload_id] = key
             self._fingerprints[key] = meta.upload_id
+            if meta.sample_signature:
+                self._samples[meta.upload_id] = (meta.target, meta.size, meta.sample_signature)
             if completed:
                 self._unfinished.discard(meta.upload_id)
             else:
@@ -118,6 +123,7 @@ class UploadStore:
             key = self._session_keys.pop(upload_id, None)
             if key and self._fingerprints.get(key) == upload_id:
                 self._fingerprints.pop(key, None)
+            self._samples.pop(upload_id, None)
             self._unfinished.discard(upload_id)
 
     def session_lock(self, upload_id: str):
@@ -218,6 +224,20 @@ class UploadStore:
             sid = self._fingerprints.get((fingerprint, target)) if target else next(
                 (sid for key, sid in self._fingerprints.items() if key[0] == fingerprint), None
             )
+        if sid is None:
+            return None
+        try:
+            return self.get_meta(sid)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            self._forget(sid)
+            return None
+
+    def find_unfinished_by_sample(self, target: str, size: int, sample: str) -> Optional[UploadMeta]:
+        wanted = (target, size, sample)
+        with self._index_lock:
+            sid = next((sid for sid, key in self._samples.items() if key == wanted and sid in self._unfinished), None)
         if sid is None:
             return None
         try:
