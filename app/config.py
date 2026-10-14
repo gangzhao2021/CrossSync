@@ -62,6 +62,9 @@ class Settings:
     # Re-sending a photo that CrossSync already saved does not create "IMG (1).HEIC".
     skip_duplicates: bool = True
 
+    # A new phone or computer must be allowed on this computer before it can connect.
+    require_device_approval: bool = True
+
     # Friendly name shown on phones instead of the OS hostname (e.g. "书房电脑").
     display_name: Optional[str] = None
 
@@ -231,6 +234,9 @@ def load_env_overrides():
         if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", mdns_name):
             raise ValueError("CROSSSYNC_MDNS_NAME may only use letters, digits and hyphens")
         settings.mdns_name = mdns_name
+    approval = os.getenv("CROSSSYNC_DEVICE_APPROVAL")
+    if approval is not None:
+        settings.require_device_approval = _env_truthy(approval)
     skip = os.getenv("CROSSSYNC_SKIP_DUPLICATES")
     if skip is not None:
         settings.skip_duplicates = _env_truthy(skip)

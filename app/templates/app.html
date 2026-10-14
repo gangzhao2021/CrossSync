@@ -59,6 +59,8 @@
             <button id="btn-rename-cancel" class="btn small ghost" type="button">取消</button>
             <p id="rename-error" class="rename-error" hidden></p>
           </form>
+          <!-- New phones wait here until someone on this computer allows them. -->
+          <div id="device-requests" class="device-requests host-only" aria-live="polite" hidden></div>
 
           <section id="view-downloads" class="view" aria-labelledby="transfer-title-main">
             <div class="view-heading">
@@ -264,6 +266,12 @@
               <label><input type="checkbox" id="chk-date-subdir" /> 按拍摄日期分文件夹保存</label>
               <label><input type="checkbox" id="chk-verify" /> 传完检查文件是否完整（会慢一些）</label>
             </div>
+          </section>
+
+          <section class="utility-card host-only">
+            <h2>允许连接的设备</h2>
+            <p class="subtle">第一次连接的手机要在这台电脑上点“允许”。移除后，它下次连接需要重新允许。</p>
+            <div id="approved-devices" class="device-list"></div>
           </section>
 
           <section class="utility-card remote-only">

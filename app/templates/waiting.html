@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
+  <title>CrossSync · 等待电脑允许</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/static/styles.css?v={{ asset_version }}" />
+</head>
+<body class="transfer-workspace-body">
+  <main class="waiting-shell">
+    <p class="waiting-brand">CrossSync</p>
+    <h1 id="waiting-title">{% if state == "denied" %}电脑拒绝了这台设备{% else %}请在电脑上点“允许”{% endif %}</h1>
+    <p id="waiting-copy" class="waiting-copy">
+      {% if state == "denied" %}
+      如果是误点，请在电脑上打开 CrossSync，过几分钟再扫一次码。
+      {% elif state == "busy" %}
+      电脑上等待确认的设备太多了，请稍后再试。
+      {% else %}
+      为了安全，第一次连接 <strong>{{ computer_name }}</strong> 时需要在电脑上确认一次。电脑上的 CrossSync 页面会弹出提示，以后就不用再确认了。
+      {% endif %}
+    </p>
+    <p id="waiting-status" class="waiting-status" {% if state == "denied" %}hidden{% endif %}><span class="waiting-dot" aria-hidden="true"></span>正在等待…</p>
+  </main>
+  <script>
+    // Tell the computer's QR page the code was scanned, so it opens the page
+    // where the approval prompt appears.
+    const sid = new URLSearchParams(location.search).get('sid');
+    if (sid) fetch(`/api/scanned?sid=${encodeURIComponent(sid)}`, { method: 'POST' }).catch(() => {});
+
+    const title = document.getElementById('waiting-title');
+    const copy = document.getElementById('waiting-copy');
+    const status = document.getElementById('waiting-status');
+    async function check() {
+      try {
+        const res = await fetch('/api/device/status', { cache: 'no-store' });
+        const data = await res.json();
+        if (data.status === 'approved') {
+          status.textContent = '已允许，正在打开…';
+          location.replace('/app' + location.hash);
+          return;
+        }
+        if (data.status === 'denied') {
+          title.textContent = '电脑拒绝了这台设备';
+          copy.textContent = '如果是误点，请在电脑上打开 CrossSync，过几分钟再扫一次码。';
+          status.hidden = true;
+          return;
+        }
+        if (data.status === 'unknown') {
+          // The request expired or the computer restarted: ask again.
+          location.reload();
+          return;
+        }
+      } catch (_) {}
+      setTimeout(check, 2000);
+    }
+    {% if state != "denied" %}setTimeout(check, 2000);{% endif %}
+  </script>
+</body>
+</html>

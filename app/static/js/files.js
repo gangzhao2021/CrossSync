@@ -456,6 +456,7 @@ els.btnChooseDownloads?.addEventListener('click', async () => {
 });
 
 refreshRuntimeConfig().finally(() => {
+  void loadDevices();
   // Empty-list wording depends on which device this is, which is only known now.
   ['downloads', 'outbox'].forEach((area) => {
     if (!areaState[area].files.length) renderArea(area);
@@ -658,7 +659,84 @@ function flushArrivals() {
   }
 }
 
+// --- New devices asking to connect (shown on the computer only) ---
+
+const deviceRequestsEl = $('device-requests');
+const approvedDevicesEl = $('approved-devices');
+const notifiedDevices = new Set();
+
+function formatSeen(seconds) {
+  return seconds ? formatFileTime(seconds) : '';
+}
+
+async function decideDevice(id, action) {
+  try {
+    await fetchJson(`/api/devices/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+  } catch (err) {
+    alert(`没能完成操作：${describeError(err)}`);
+  }
+  void loadDevices();
+}
+
+async function forgetDevice(id, name) {
+  if (!confirm(`移除“${name}”？它下次连接时需要重新允许。`)) return;
+  try {
+    await fetchJson(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  } catch (err) {
+    alert(`没能移除：${describeError(err)}`);
+  }
+  void loadDevices();
+}
+
+function renderDevices(data) {
+  if (deviceRequestsEl) {
+    const pending = data.pending || [];
+    deviceRequestsEl.hidden = pending.length === 0;
+    deviceRequestsEl.replaceChildren(...pending.map((item) => h('div', { class: 'device-request' },
+      h('div', { class: 'device-request-copy' },
+        h('strong', { text: `${item.name} 想连接这台电脑` }),
+        h('span', { text: item.address ? `来自 ${item.address}` : '' }),
+      ),
+      h('div', { class: 'device-request-actions' },
+        h('button', { class: 'btn small primary', type: 'button', text: '允许', onclick: () => decideDevice(item.id, 'approve') }),
+        h('button', { class: 'btn small ghost', type: 'button', text: '拒绝', onclick: () => decideDevice(item.id, 'deny') }),
+      ),
+    )));
+    pending.forEach((item) => {
+      if (notifiedDevices.has(item.id)) return;
+      notifiedDevices.add(item.id);
+      if ((document.hidden || !document.hasFocus()) && 'Notification' in window && Notification.permission === 'granted') {
+        const note = new Notification('CrossSync', { body: `${item.name} 想连接，点这里允许或拒绝`, tag: `device-${item.id}`, icon: '/static/app-icon-192.png' });
+        note.onclick = () => { window.focus(); note.close(); };
+      }
+    });
+  }
+  if (approvedDevicesEl) {
+    const approved = data.approved || [];
+    approvedDevicesEl.replaceChildren(...(approved.length
+      ? approved.map((item) => h('div', { class: 'device-row' },
+        h('div', { class: 'device-row-copy' },
+          h('strong', { text: item.name }),
+          h('span', { text: item.last_seen ? `最近使用：${formatSeen(item.last_seen)}` : '' }),
+        ),
+        h('button', { class: 'btn small ghost danger', type: 'button', text: '移除', onclick: () => forgetDevice(item.id, item.name) }),
+      ))
+      : [h('p', { class: 'subtle', text: data.enabled === false ? '已关闭设备确认，任何拿到二维码的设备都能连接。' : '还没有允许过任何设备。' })]));
+  }
+}
+
+async function loadDevices() {
+  if (!runtimeConfig.isHostDevice) return;
+  try {
+    renderDevices(await fetchJson('/api/devices'));
+  } catch (_) {}
+}
+
 function handleLiveEvent(event) {
+  if (event?.type === 'device-request' || event?.type === 'device-decided') {
+    void loadDevices();
+    return;
+  }
   if (!['downloads', 'outbox'].includes(event?.area)) return;
   void refreshArea(event.area);
   if (event.type !== 'received') return;

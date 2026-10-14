@@ -157,7 +157,12 @@ async def check_duplicate(payload: dict = Body(...)):
     size)? The phone only hashes the file when it is. With sha256: the saved
     file with exactly those bytes, so the phone can skip the upload.
     """
-    return JSONResponse(await run_io(duplicate_answer, payload))
+    answer = await run_io(duplicate_answer, payload)
+    if answer.get("duplicate"):
+        # Published here, on the event loop: the event queues are not thread-safe.
+        events.publish("received", area=answer["area"], path=answer["path"], size=answer["size"],
+                       duplicate=True, upload_id=None)
+    return JSONResponse(answer)
 
 
 def duplicate_answer(payload) -> dict:
@@ -178,8 +183,8 @@ def duplicate_answer(payload) -> dict:
     if not path:
         return {"enabled": True, "possible": True, "duplicate": False}
     rel_path = area_rel_path(path, base_dir)
-    events.publish("received", area=target, path=rel_path, size=size, duplicate=True, upload_id=None)
-    return {"enabled": True, "possible": True, "duplicate": True, "path": rel_path, "saved": path, "sha256": sha}
+    return {"enabled": True, "possible": True, "duplicate": True, "path": rel_path, "saved": path,
+            "sha256": sha, "area": target, "size": size}
 
 
 @router.post("/api/init-upload")

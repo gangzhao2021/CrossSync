@@ -31,7 +31,8 @@ class AccessControlTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_lan_api_requires_token(self):
-        with patch.object(settings, "access_token", "123456789012"):
+        with patch.object(settings, "access_token", "123456789012"), patch.object(
+                settings, "require_device_approval", False):
             with TestClient(app) as client:
                 response = client.get("/api/config")
                 self.assertEqual(response.status_code, 401)

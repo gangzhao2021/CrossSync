@@ -1374,6 +1374,121 @@ body.utility-open {
   accent-color: var(--text);
 }
 
+/* ---- New devices ---------------------------------------------------------- */
+
+.device-requests {
+  display: grid;
+  gap: 8px;
+}
+
+.device-request {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--text);
+  border-radius: 14px;
+}
+
+.device-request-copy,
+.device-row-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.device-request-copy strong {
+  font-weight: 600;
+}
+
+.device-request-copy span,
+.device-row-copy span {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.device-request-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.device-list {
+  display: grid;
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.device-row + .device-row {
+  border-top: 1px solid var(--line);
+}
+
+.device-row-copy strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.waiting-shell {
+  display: grid;
+  align-content: center;
+  gap: 16px;
+  width: min(520px, calc(100% - 48px));
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 48px 0;
+}
+
+.waiting-brand {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.waiting-shell h1 {
+  font-size: 32px;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.waiting-copy {
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.waiting-copy strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.waiting-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-3);
+  font-size: 14px;
+}
+
+.waiting-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text);
+  animation: waiting-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes waiting-pulse {
+  50% {
+    opacity: 0.2;
+  }
+}
+
 /* ---- Pairing (QR) page --------------------------------------------------- */
 
 .pairing-shell {

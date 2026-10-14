@@ -27,7 +27,7 @@ from .config import ensure_dirs, load_env_overrides, set_display_name, set_downl
 load_env_overrides()
 ensure_dirs()
 
-from . import events, library, pairing, transfer_log, transfers  # noqa: E402  (need settings loaded first)
+from . import devices, events, library, pairing, transfer_log, transfers  # noqa: E402  (need settings loaded first)
 from .common import is_host_request, run_io  # noqa: E402
 from .discovery import REFRESH_SECONDS, advertiser, certificate_covers  # noqa: E402
 from .utils import folder_picker_available, get_lan_ip, pick_folder  # noqa: E402
@@ -36,6 +36,9 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#247c6d"/><path fill="#fffefa" d="M18 19h12v6h-6v14h6v6H18V19Zm16 0h12v6h-8v5h7v6h-7v9h-6V19Z"/></svg>"""
 PUBLIC_PATHS = {"/favicon.ico", "/manifest.webmanifest", "/sw.js", "/ca.crt", "/healthz"}
+# A device still waiting for approval may only ask whether it has been allowed,
+# and tell the computer's QR page that it scanned the code.
+WAITING_PATHS = {"/api/device/status", "/api/scanned"}
 
 
 def compute_asset_version() -> str:
@@ -90,6 +93,7 @@ app.include_router(transfers.router)
 app.include_router(library.router)
 app.include_router(pairing.router)
 app.include_router(events.router)
+app.include_router(devices.router)
 
 
 def phone_host(request: Request) -> str:
@@ -124,25 +128,42 @@ async def access_gate(request: Request, call_next):
     query_token = request.query_params.get("k", "")
     token = bearer or request.headers.get("x-crosssync-token", "") or request.cookies.get("crosssync_access", "") or query_token
     if token and settings.access_token and secrets.compare_digest(token, settings.access_token):
+        device_id, issue_cookie = devices.identify(request)
         if query_token and request.method == "GET" and path == "/app":
             clean_query = urlencode([(key, value) for key, value in request.query_params.multi_items() if key != "k"])
             response = RedirectResponse(str(request.url.replace(query=clean_query)), status_code=303)
-        else:
+        elif not settings.require_device_approval or path in WAITING_PATHS or devices.is_approved(device_id):
+            if settings.require_device_approval and path not in WAITING_PATHS:
+                devices.touch(device_id)
             response = await call_next(request)
-        response.set_cookie(
-            "crosssync_access",
-            settings.access_token,
-            httponly=True,
-            secure=request.url.scheme == "https",
-            samesite="strict",
-            max_age=60 * 60 * 24 * 180,
-        )
+        else:
+            response = waiting_response(request, devices.request_access(
+                device_id, request.headers.get("user-agent", ""), request.client.host if request.client else "",
+            ))
+        secure = request.url.scheme == "https"
+        cookie_age = 60 * 60 * 24 * 180
+        response.set_cookie("crosssync_access", settings.access_token, httponly=True, secure=secure,
+                            samesite="strict", max_age=cookie_age)
+        if issue_cookie:
+            response.set_cookie(devices.DEVICE_COOKIE, device_id, httponly=True, secure=secure,
+                                samesite="strict", max_age=cookie_age * 2)
         return response
 
     await asyncio.sleep(0.15)
     if path.startswith("/api/") or path.startswith("/dl/"):
         return JSONResponse({"detail": "需要 CrossSync 访问令牌"}, status_code=401)
     return HTMLResponse("<h3>需要 CrossSync 访问令牌</h3><p>请从电脑端二维码重新打开。</p>", status_code=401)
+
+
+def waiting_response(request: Request, state: str):
+    """What a device sees until the computer allows it."""
+    if request.url.path.startswith("/api/") or request.url.path.startswith("/dl/"):
+        detail = "电脑拒绝了这台设备" if state == "denied" else "等待电脑上允许这台设备"
+        return JSONResponse({"detail": detail, "device": state}, status_code=403)
+    return templates.TemplateResponse(request, "waiting.html", {
+        "computer_name": computer_display_name(),
+        "state": state,
+    }, status_code=403)
 
 
 @app.get("/", response_class=HTMLResponse)

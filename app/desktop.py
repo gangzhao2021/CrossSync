@@ -142,7 +142,20 @@ def run_tray(base_url: str, settings, port: int, stop) -> None:
         pystray.MenuItem("退出 CrossSync", quit_app),
     )
     icon = pystray.Icon("CrossSync", image, f"CrossSync · {host}:{port}", menu)
-    icon.run()
+
+    from . import devices
+
+    def announce_device(item):
+        try:
+            icon.notify(f"{item.name} 想连接这台电脑。打开 CrossSync 点“允许”或“拒绝”。", "CrossSync")
+        except Exception:
+            log.exception("Could not show the new-device notification")
+
+    devices.request_listeners.add(announce_device)
+    try:
+        icon.run()
+    finally:
+        devices.request_listeners.discard(announce_device)
     stop()
 
 

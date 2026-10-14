@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS transfers (
     sha256 TEXT
 );
 CREATE INDEX IF NOT EXISTS transfers_by_area ON transfers(area);
+CREATE TABLE IF NOT EXISTS devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    approved_at REAL NOT NULL,
+    last_seen REAL NOT NULL
+);
 """
 
 _lock = threading.RLock()

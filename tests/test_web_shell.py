@@ -14,7 +14,8 @@ from app import events, pairing
 
 class AssetVersionTests(unittest.TestCase):
     def test_pages_and_service_worker_share_asset_version(self):
-        with patch.object(main.settings, "mdns_enabled", False), TestClient(main.app) as client:
+        with patch.object(main.settings, "mdns_enabled", False), patch.object(
+                main.settings, "require_device_approval", False), TestClient(main.app) as client:
             headers = {"Authorization": f"Bearer {main.settings.access_token}"}
             page = client.get("/app", headers=headers).text
             worker = client.get("/sw.js").text
@@ -27,7 +28,8 @@ class AssetVersionTests(unittest.TestCase):
         self.assertNotIn("figma", page.lower())
 
     def test_pairing_page_does_not_print_the_token_link(self):
-        with patch.object(main.settings, "mdns_enabled", False), TestClient(main.app) as client:
+        with patch.object(main.settings, "mdns_enabled", False), patch.object(
+                main.settings, "require_device_approval", False), TestClient(main.app) as client:
             page = client.get("/", headers={"Authorization": f"Bearer {main.settings.access_token}"}).text
         self.assertNotIn("?k=", page)
         self.assertNotIn(f">{main.settings.access_token}<", page)  # Only revealed on demand.
