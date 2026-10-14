@@ -1374,6 +1374,86 @@ body.utility-open {
   accent-color: var(--text);
 }
 
+/* ---- Text between devices ---------------------------------------------------- */
+
+.text-form {
+  display: grid;
+  gap: 10px;
+}
+
+.text-form textarea {
+  width: 100%;
+  min-height: 108px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.text-form textarea:focus {
+  border-color: var(--text);
+  outline: none;
+}
+
+.text-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.text-form-actions .btn.primary {
+  min-height: 40px;
+  padding: 0 22px;
+}
+
+.text-status {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.text-list {
+  display: grid;
+}
+
+.text-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 0;
+}
+
+.text-item + .text-item {
+  border-top: 1px solid var(--line);
+}
+
+.text-meta {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.text-body {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 15px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.text-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* ---- New devices ---------------------------------------------------------- */
 
 .device-requests {

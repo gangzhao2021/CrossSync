@@ -465,39 +465,195 @@ refreshRuntimeConfig().finally(() => {
   refreshArea('outbox');
 });
 
-// --- The two pages: "downloads" (to the computer) and "outbox" (to the iPhone) ---
+// --- The pages: "downloads" (to the computer), "outbox" (to the iPhone), "text" ---
 
+const VIEWS = {
+  downloads: { el: els.viewDownloads, tab: $('nav-to-computer'), hash: '' },
+  outbox: { el: els.viewOutbox, tab: els.btnSendToIphone, hash: '#iphone' },
+  text: { el: $('view-text'), tab: $('nav-text'), hash: '#text' },
+};
 let currentView = 'downloads';
 const feedbackHome = { parent: els.transferFeedback?.parentNode, next: els.transferFeedback?.nextSibling };
 
 function showView(view) {
-  currentView = view === 'outbox' ? 'outbox' : 'downloads';
-  const outbox = currentView === 'outbox';
-  if (els.viewDownloads) els.viewDownloads.hidden = outbox;
-  if (els.viewOutbox) els.viewOutbox.hidden = !outbox;
-  [[$('nav-to-computer'), !outbox], [els.btnSendToIphone, outbox]].forEach(([tab, active]) => {
-    if (!tab) return;
-    tab.classList.toggle('is-active', active);
-    if (active) tab.setAttribute('aria-current', 'page');
-    else tab.removeAttribute('aria-current');
+  currentView = VIEWS[view] ? view : 'downloads';
+  Object.entries(VIEWS).forEach(([name, page]) => {
+    const active = name === currentView;
+    if (page.el) page.el.hidden = !active;
+    if (!page.tab) return;
+    page.tab.classList.toggle('is-active', active);
+    if (active) page.tab.setAttribute('aria-current', 'page');
+    else page.tab.removeAttribute('aria-current');
   });
   // Progress and results belong to whichever page started the transfer.
-  if (els.transferFeedback) {
-    if (outbox) els.outboxFeedbackSlot?.append(els.transferFeedback);
+  if (els.transferFeedback && currentView !== 'text') {
+    if (currentView === 'outbox') els.outboxFeedbackSlot?.append(els.transferFeedback);
     else feedbackHome.parent?.insertBefore(els.transferFeedback, feedbackHome.next);
   }
-  setDirection(currentView);
-  const hash = outbox ? '#iphone' : '';
+  if (currentView !== 'text') setDirection(currentView);
+  const { hash } = VIEWS[currentView];
   if (window.location.hash !== hash) history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`);
-  if (outbox) {
+  if (currentView === 'outbox') {
     updateShareNotice();
     void refreshArea('outbox');
+  }
+  if (currentView === 'text') {
+    markTextsSeen();
+    void loadTexts();
   }
   window.scrollTo({ top: 0 });
 }
 
 $('nav-to-computer')?.addEventListener('click', () => showView('downloads'));
-showView(window.location.hash === '#iphone' ? 'outbox' : 'downloads');
+$('nav-text')?.addEventListener('click', () => showView('text'));
+
+// --- Text between devices ---
+
+const textEls = {
+  form: $('text-form'),
+  input: $('text-input'),
+  paste: $('btn-text-paste'),
+  send: $('btn-text-send'),
+  status: $('text-status'),
+  list: $('text-list'),
+  clear: $('btn-text-clear'),
+  badge: $('text-badge'),
+};
+const TEXT_SEEN_KEY = 'crosssync_text_seen';
+let latestTextId = 0;
+
+function markTextsSeen() {
+  if (latestTextId) storeSet(TEXT_SEEN_KEY, String(latestTextId));
+  if (textEls.badge) textEls.badge.hidden = true;
+}
+
+// Copy without HTTPS: Safari only offers navigator.clipboard on secure pages.
+async function copyText(text) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {}
+  }
+  const area = h('textarea', { readonly: true, style: 'position:fixed;top:0;left:0;opacity:0;' });
+  area.value = text;
+  document.body.append(area);
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (_) {}
+  area.remove();
+  return ok;
+}
+
+function singleLink(text) {
+  const trimmed = text.trim();
+  return /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : '';
+}
+
+function renderTexts(items) {
+  if (!textEls.list) return;
+  if (textEls.clear) textEls.clear.hidden = items.length === 0;
+  if (!items.length) {
+    textEls.list.replaceChildren(h('div', { class: 'empty-state', text: '还没有文字。在上面粘贴一段发出去试试。' }));
+    return;
+  }
+  textEls.list.replaceChildren(...items.map((item) => {
+    const link = singleLink(item.text);
+    const copyBtn = h('button', { class: 'btn small', type: 'button', text: '复制' });
+    copyBtn.addEventListener('click', async () => {
+      const ok = await copyText(item.text);
+      copyBtn.textContent = ok ? '已复制' : '复制失败，请长按文字复制';
+      window.setTimeout(() => { copyBtn.textContent = '复制'; }, 2000);
+    });
+    const removeBtn = h('button', { class: 'btn small ghost', type: 'button', text: '删除' });
+    removeBtn.addEventListener('click', async () => {
+      try {
+        await fetchJson(`/api/text/${item.id}`, { method: 'DELETE' });
+      } catch (_) {}
+      void loadTexts();
+    });
+    return h('article', { class: 'text-item' },
+      h('div', { class: 'text-meta', text: `${item.sender} · ${formatFileTime(item.created)}` }),
+      h('p', { class: 'text-body', text: item.text }),
+      h('div', { class: 'text-actions' },
+        copyBtn,
+        link ? h('a', { class: 'btn small ghost', href: link, target: '_blank', rel: 'noopener', text: '打开链接' }) : null,
+        removeBtn,
+      ),
+    );
+  }));
+}
+
+async function loadTexts() {
+  try {
+    const data = await fetchJson('/api/text');
+    const items = data.items || [];
+    latestTextId = items[0]?.id || 0;
+    renderTexts(items);
+    const seen = Number(storeGet(TEXT_SEEN_KEY, '0'));
+    if (currentView === 'text') markTextsSeen();
+    else if (textEls.badge) {
+      const unseen = items.filter((item) => item.id > seen).length;
+      textEls.badge.hidden = unseen === 0;
+      textEls.badge.textContent = String(unseen);
+    }
+  } catch (_) {}
+}
+
+textEls.form?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const text = textEls.input?.value || '';
+  if (!text.trim()) {
+    if (textEls.status) textEls.status.textContent = '先输入或粘贴一些文字';
+    textEls.input?.focus();
+    return;
+  }
+  if (textEls.send) textEls.send.disabled = true;
+  try {
+    await fetchJson('/api/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    textEls.input.value = '';
+    if (textEls.status) textEls.status.textContent = '已发送';
+    void loadTexts();
+  } catch (err) {
+    if (textEls.status) textEls.status.textContent = `没能发送：${describeError(err)}`;
+  } finally {
+    if (textEls.send) textEls.send.disabled = false;
+    window.setTimeout(() => { if (textEls.status) textEls.status.textContent = ''; }, 3000);
+  }
+});
+textEls.input?.addEventListener('input', () => { if (textEls.status) textEls.status.textContent = ''; });
+
+// Reading the clipboard needs a secure page; on the computer (localhost) it works.
+if (textEls.paste && navigator.clipboard?.readText && window.isSecureContext) {
+  textEls.paste.hidden = false;
+  textEls.paste.addEventListener('click', async () => {
+    try {
+      textEls.input.value = await navigator.clipboard.readText();
+      textEls.input.focus();
+    } catch (_) {
+      if (textEls.status) textEls.status.textContent = '浏览器没有允许读取剪贴板，请手动粘贴';
+    }
+  });
+}
+
+textEls.clear?.addEventListener('click', async () => {
+  if (!confirm('清除全部文字？')) return;
+  try {
+    await fetchJson('/api/text', { method: 'DELETE' });
+  } catch (_) {}
+  void loadTexts();
+});
+
+const VIEW_FROM_HASH = { '#iphone': 'outbox', '#text': 'text' };
+showView(VIEW_FROM_HASH[window.location.hash] || 'downloads');
+void loadTexts();
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || !els.utilityDrawer?.open) return;
@@ -735,6 +891,15 @@ async function loadDevices() {
 function handleLiveEvent(event) {
   if (event?.type === 'device-request' || event?.type === 'device-decided') {
     void loadDevices();
+    return;
+  }
+  if (event?.type === 'text') {
+    void loadTexts();
+    const away = document.hidden || !document.hasFocus();
+    if (!event.removed && away && notificationsAllowed()) {
+      const note = new Notification(`${event.sender} 发来文字`, { body: event.preview || '', tag: 'crosssync-text', icon: '/static/app-icon-192.png' });
+      note.onclick = () => { window.focus(); showView('text'); note.close(); };
+    }
     return;
   }
   if (!['downloads', 'outbox'].includes(event?.area)) return;

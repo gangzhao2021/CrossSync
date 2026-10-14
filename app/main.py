@@ -27,7 +27,7 @@ from .config import ensure_dirs, load_env_overrides, set_display_name, set_downl
 load_env_overrides()
 ensure_dirs()
 
-from . import devices, events, library, pairing, transfer_log, transfers  # noqa: E402  (need settings loaded first)
+from . import devices, events, library, pairing, texts, transfer_log, transfers  # noqa: E402  (need settings loaded first)
 from .common import is_host_request, run_io  # noqa: E402
 from .discovery import REFRESH_SECONDS, advertiser, certificate_covers  # noqa: E402
 from .utils import folder_picker_available, get_lan_ip, pick_folder  # noqa: E402
@@ -94,6 +94,7 @@ app.include_router(library.router)
 app.include_router(pairing.router)
 app.include_router(events.router)
 app.include_router(devices.router)
+app.include_router(texts.router)
 
 
 def phone_host(request: Request) -> str:

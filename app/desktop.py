@@ -112,6 +112,48 @@ def prepare_https(settings) -> Optional[tuple]:
         return None
 
 
+def copy_to_clipboard(text: str) -> bool:
+    """Put text on the Windows clipboard; False elsewhere or on failure."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    # 64-bit handles: without these, ctypes would squeeze them into a C int.
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = wintypes.LPVOID
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    data = text.encode("utf-16-le") + b"\0\0"
+    handle = kernel32.GlobalAlloc(0x0002, len(data))  # GMEM_MOVEABLE
+    if not handle:
+        return False
+    pointer = kernel32.GlobalLock(handle)
+    ctypes.memmove(pointer, data, len(data))
+    kernel32.GlobalUnlock(handle)
+    for _ in range(10):  # Another program may hold the clipboard for a moment.
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        kernel32.GlobalFree(handle)
+        return False
+    try:
+        user32.EmptyClipboard()
+        if not user32.SetClipboardData(13, handle):  # CF_UNICODETEXT; the clipboard now owns it.
+            kernel32.GlobalFree(handle)
+            return False
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
 def run_tray(base_url: str, settings, port: int, stop) -> None:
     import pystray
     from PIL import Image
@@ -151,11 +193,24 @@ def run_tray(base_url: str, settings, port: int, stop) -> None:
         except Exception:
             log.exception("Could not show the new-device notification")
 
+    from . import texts
+
+    def receive_text(item):
+        copied = copy_to_clipboard(item["text"])
+        preview = item["text"] if len(item["text"]) <= 60 else item["text"][:60] + "…"
+        title = f"{item['sender']} 发来文字" + ("，已复制到剪贴板" if copied else "")
+        try:
+            icon.notify(preview, title)
+        except Exception:
+            log.exception("Could not show the text notification")
+
     devices.request_listeners.add(announce_device)
+    texts.received_listeners.add(receive_text)
     try:
         icon.run()
     finally:
         devices.request_listeners.discard(announce_device)
+        texts.received_listeners.discard(receive_text)
     stop()
 
 

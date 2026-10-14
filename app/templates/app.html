@@ -30,6 +30,9 @@
           <span class="label-host">发到 iPhone</span><span class="label-phone">从电脑接收</span>
           <span id="share-badge" class="nav-badge" hidden></span>
         </button>
+        <button id="nav-text" class="topnav-item" type="button" aria-controls="view-text">
+          文字<span id="text-badge" class="nav-badge" hidden></span>
+        </button>
         <input id="input-outbox" type="file" multiple hidden />
       </nav>
 
@@ -230,6 +233,31 @@
                 <button id="btn-ob-cancel-sel" class="btn small ghost" type="button">取消</button>
               </div>
               <div id="outbox-list" class="file-list"></div>
+            </section>
+          </section>
+
+          <section id="view-text" class="view" aria-labelledby="text-title" hidden>
+            <div class="view-heading">
+              <h1 id="text-title">文字和剪贴板</h1>
+              <p class="view-copy">在一台设备上粘贴，另一台马上就能复制。适合链接、验证码、地址。<span class="host-only">手机发来的文字会自动复制到这台电脑的剪贴板（需要 CrossSync 在托盘里运行）。</span></p>
+            </div>
+            <form id="text-form" class="text-form">
+              <label class="sr-only" for="text-input">要发送的文字</label>
+              <textarea id="text-input" rows="4" maxlength="20000" placeholder="粘贴链接、验证码或一段话…"></textarea>
+              <div class="text-form-actions">
+                <button id="btn-text-paste" class="btn" type="button" hidden>粘贴剪贴板</button>
+                <button id="btn-text-send" class="btn primary" type="submit">发送</button>
+                <span id="text-status" class="text-status" aria-live="polite"></span>
+              </div>
+            </form>
+            <section class="recent-transfers" aria-labelledby="text-list-title">
+              <div class="section-head">
+                <h2 id="text-list-title">最近的文字</h2>
+                <div class="toolbar">
+                  <button id="btn-text-clear" class="btn small ghost" type="button" hidden>全部清除</button>
+                </div>
+              </div>
+              <div id="text-list" class="text-list"></div>
             </section>
           </section>
         </div>

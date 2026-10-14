@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS transfers (
     sha256 TEXT
 );
 CREATE INDEX IF NOT EXISTS transfers_by_area ON transfers(area);
+CREATE TABLE IF NOT EXISTS texts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    created REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
