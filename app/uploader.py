@@ -43,6 +43,8 @@ class UploadMeta:
     total_chunks: int
     received: Dict[str, int]  # chunk_index -> size (string keys for JSON)
     target_dir: Optional[str] = None
+    # The phone's file time in milliseconds, used when the file has no capture time.
+    last_modified: Optional[int] = None
 
     def destination_dir(self) -> str:
         return self.target_dir or area_dir(self.target)

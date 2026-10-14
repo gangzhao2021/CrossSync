@@ -21,6 +21,7 @@ from .common import (
     wants_checksum,
 )
 from .config import area_dir, settings
+from .media_time import apply_original_time
 from .uploader import (
     AssemblyResult,
     UploadMeta,
@@ -164,6 +165,10 @@ def _initialize_upload(payload):
         chunk_size = int(settings.default_chunk_size if raw_chunk_size is None else raw_chunk_size)
         last_modified = payload.get("last_modified")
         target = payload.get("target", "downloads")
+        try:
+            last_modified = int(last_modified) if last_modified not in (None, "") else None
+        except (TypeError, ValueError):
+            last_modified = None  # Only a hint; never reject an upload over it.
         client_id = str(payload.get("client_id") or "")
         resume_key = str(payload.get("resume_key") or "")
         if target not in ("downloads", "outbox"):
@@ -210,6 +215,7 @@ def _initialize_upload(payload):
         total_chunks=total_chunks,
         received={},
         target_dir=target_dir,
+        last_modified=last_modified,
     )
     upload_store.init_session(meta)
     return JSONResponse({
@@ -436,6 +442,8 @@ async def _upload_stream(request: Request, reservation_id: str):
 
     rel_path = area_rel_path(final_path, target_dir)
     sha = sha256.hexdigest() if sha256 else None
+    # Before recording: the transfer log remembers the file's modified time.
+    await run_io(apply_original_time, final_path, request.query_params.get("last_modified"))
     checksum_info = await run_io(record_saved_file, target, rel_path, final_path, sha)
     open_folder_if_requested(request, final_path)
     release_reserved_path(final_path)
@@ -473,6 +481,9 @@ async def finish_result(upload_id: str, request: Request) -> dict:
         upload_store.assemble, upload_id, compute_sha256=compute_checksum, find_duplicate=find_duplicate,
     )
     rel_path = area_rel_path(result.path, meta.destination_dir())
+    if not result.duplicate:
+        # Before recording: the transfer log remembers the file's modified time.
+        await run_io(apply_original_time, result.path, meta.last_modified)
     checksum_info = await run_io(
         record_saved_file, meta.target, rel_path, result.path, result.sha256, not result.duplicate,
     )

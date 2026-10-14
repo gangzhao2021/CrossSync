@@ -315,6 +315,16 @@ class UploadReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(publish.call_args_list[0].kwargs["upload_id"])
         self.assertTrue(first["saved"])
 
+    async def test_saved_file_keeps_the_phone_file_time(self):
+        sid = (await self.initialize(name="notes.txt", size=8, last_modified=1_600_000_000_000))["upload_id"]
+        for idx in range(2):
+            await transfers.upload_chunk(sid, idx, ChunkRequest(b"abcdefgh"[idx * 4:(idx + 1) * 4]))
+        saved = json.loads((await transfers.finish_upload(sid, finish_request())).body)["saved"]
+        self.assertEqual(os.path.getmtime(saved), 1_600_000_000)
+        # Recorded after the time was set, so the same bytes are still recognised.
+        again = await self.upload_whole("notes copy.txt", b"abcdefgh")
+        self.assertTrue(again["duplicate"])
+
     async def test_same_size_but_different_bytes_are_both_saved(self):
         await self.upload_whole("a.jpg", b"abcdefgh")
         other = await self.upload_whole("b.jpg", b"ABCDEFGH")
