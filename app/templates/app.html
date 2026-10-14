@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#07101f" />
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#151517" media="(prefers-color-scheme: dark)" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -72,7 +73,6 @@
       <main class="transfer-home">
         <section class="transfer-hero" aria-labelledby="transfer-title-main">
           <div class="transfer-heading">
-            <p class="workspace-eyebrow">iPhone → 电脑</p>
             <h1 id="transfer-title-main">发送到 <span id="computer-name-heading">这台电脑</span></h1>
             <button id="btn-rename-computer" class="inline-action rename-action host-only" type="button">起个好记的名字</button>
             <div class="destination-line">
@@ -151,7 +151,6 @@
           <section id="transfer-live-region" class="transfer-live-region" data-has-active="false" aria-labelledby="live-transfer-title">
             <div class="live-transfer-head">
               <div>
-                <p class="workspace-eyebrow">传输</p>
                 <h2 id="live-transfer-title">当前传输</h2>
               </div>
               <div class="live-transfer-summary" aria-live="polite">
@@ -196,7 +195,6 @@
           <section class="recent-transfers" aria-labelledby="recent-title">
             <div class="recent-header">
               <div>
-                <p class="workspace-eyebrow">电脑</p>
                 <h2 id="recent-title">最近传输</h2>
               </div>
               <div class="recent-actions">
@@ -251,16 +249,13 @@
         <summary>
           <span id="utility-title">文件管理与传输设置</span>
           <small>管理 iPhone 共享箱、队列和高级选项</small>
+          <button id="btn-close-utility" class="btn small" type="button">完成</button>
         </summary>
 
         <div class="utility-content">
-          <div class="utility-close-row">
-            <button id="btn-close-utility" class="btn small ghost" type="button">关闭文件管理</button>
-          </div>
           <section class="utility-card transfer-settings-card">
             <div class="utility-head">
               <div>
-                <p class="workspace-eyebrow">传输设置</p>
                 <h2 id="transfer-title">手机照片，直接保存到电脑</h2>
                 <p id="direction-copy" class="subtle">文件会直接写入电脑保存位置。</p>
               </div>
@@ -282,7 +277,6 @@
           <section class="utility-card file-section outbox-section">
             <div class="section-head">
               <div>
-                <p class="workspace-eyebrow">iPhone</p>
                 <h2>iPhone 共享箱</h2>
                 <p class="subtle label-host">放进这里的文件，iPhone 打开 CrossSync 就能下载。</p>
                 <p class="subtle label-phone">电脑发来的文件。照片和视频点“存到相册”，在弹出的面板里选“存储图像”或“保存视频”；其他文件点文件名下载到“文件”App。</p>
