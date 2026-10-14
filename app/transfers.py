@@ -5,7 +5,9 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
+from urllib.parse import unquote
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
@@ -444,13 +446,40 @@ async def upload_stream_route(request: Request):
     return await upload_stream(request)
 
 
+EXTENSION_BY_TYPE = {
+    "image/heic": ".heic", "image/heif": ".heif", "image/jpeg": ".jpg", "image/png": ".png",
+    "image/gif": ".gif", "image/webp": ".webp", "video/quicktime": ".mov", "video/mp4": ".mp4",
+    "application/pdf": ".pdf", "text/plain": ".txt", "application/zip": ".zip",
+}
+
+
+def stream_file_name(request: Request) -> str:
+    """The name to save a stream upload under.
+
+    iPhone Shortcuts can send a file as the raw request body but often without
+    a usable name, or a name without an extension (a photo is just "IMG_1234").
+    Missing names get a timestamp, missing extensions come from Content-Type.
+    """
+    name = request.query_params.get("name") or unquote(request.headers.get("x-file-name") or "")
+    name = name.strip()
+    if not name:
+        name = time.strftime("来自 iPhone %Y-%m-%d %H-%M-%S")
+    extension = os.path.splitext(name)[1]
+    if not re.fullmatch(r"\.[A-Za-z0-9]{1,5}", extension) or extension[1:].isdigit():
+        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        name += EXTENSION_BY_TYPE.get(content_type, "")
+    return name
+
+
 async def _upload_stream(request: Request, reservation_id: str):
-    name = request.query_params.get("name") or request.headers.get("x-file-name")
+    name = stream_file_name(request)
     target = request.query_params.get("target", "downloads")
-    if not name or target not in ("downloads", "outbox"):
+    if target not in ("downloads", "outbox"):
         raise HTTPException(status_code=400, detail="invalid stream upload request")
     try:
-        expected_size = int(request.query_params.get("size") or request.headers.get("x-file-size") or "")
+        # Shortcuts cannot easily send the size; the request length is the same thing.
+        expected_size = int(request.query_params.get("size") or request.headers.get("x-file-size")
+                            or request.headers.get("content-length") or "")
     except ValueError:
         raise HTTPException(status_code=400, detail="valid file size is required")
     if expected_size < 0 or expected_size > settings.max_file_size:

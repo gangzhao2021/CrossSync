@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
+  <title>CrossSync · iPhone 快捷指令</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/static/styles.css?v={{ asset_version }}" />
+</head>
+<body class="transfer-workspace-body">
+  <main class="guide-shell">
+    <a class="guide-back" href="/app">← 返回 CrossSync</a>
+    <h1>用 iPhone 快捷指令发送</h1>
+    <p class="guide-lead">设置一次以后，在“照片”或任何 App 里点“分享 → 发送到电脑”，不用先打开 CrossSync 网页。下面的地址和令牌已经替你填好，照着在 iPhone 的“快捷指令”App 里建两个快捷指令即可。</p>
+
+    <section class="guide-card">
+      <h2>先记下这两项</h2>
+      <dl class="guide-values">
+        <dt>电脑地址</dt>
+        <dd><code>{{ base_url }}</code></dd>
+        <dt>授权头</dt>
+        <dd>
+          <code id="auth-value" data-value="Bearer {{ access_token }}">Bearer ••••••••••••</code>
+          <button id="btn-show-auth" class="inline-action" type="button">显示</button>
+          <button id="btn-copy-auth" class="inline-action" type="button">复制</button>
+        </dd>
+      </dl>
+      <p class="subtle">令牌相当于密码，不要截图分享。第一次用快捷指令发送时，电脑上会弹出“iPhone 快捷指令 想连接这台电脑”，点“允许”后再运行一次。</p>
+    </section>
+
+    <section class="guide-card">
+      <h2>快捷指令一：发送照片和文件</h2>
+      <ol class="guide-steps">
+        <li>打开“快捷指令”App，点右上角“+”新建，名字改成<strong>“发送到电脑”</strong>。</li>
+        <li>点底部的 ⓘ，打开<strong>“在共享表单中显示”</strong>，接受的类型选“图像”“媒体”“文件”。</li>
+        <li>添加操作<strong>“对每个项目重复”</strong>，输入选“快捷指令输入”。</li>
+        <li>在循环里添加<strong>“获取 URL 内容”</strong>，URL 填：
+          <code class="guide-url">{{ base_url }}/api/upload-stream?target=downloads</code>
+          点“显示更多”：方法选 <strong>POST</strong>；头部添加一项，键填 <code>Authorization</code>，值填上面的授权头；请求体选<strong>“文件”</strong>，文件选“重复项目”。</li>
+        <li>可选：在 URL 末尾加上 <code>&amp;name=</code> 再插入变量“重复项目 → 名称”，电脑上就会保留原来的文件名（不加的话按时间命名）。</li>
+        <li>循环后面可以加<strong>“显示通知”</strong>，内容写“已发送到电脑”。</li>
+      </ol>
+    </section>
+
+    <section class="guide-card">
+      <h2>快捷指令二：把剪贴板发到电脑</h2>
+      <ol class="guide-steps">
+        <li>新建快捷指令，名字改成<strong>“剪贴板发到电脑”</strong>。</li>
+        <li>添加操作<strong>“获取剪贴板”</strong>。</li>
+        <li>添加<strong>“获取 URL 内容”</strong>，URL 填：
+          <code class="guide-url">{{ base_url }}/api/text</code>
+          方法选 <strong>POST</strong>；头部同上；请求体选<strong>“JSON”</strong>，添加一个“文本”类型的键 <code>text</code>，值选“剪贴板”。</li>
+        <li>电脑上运行着 CrossSync 托盘程序时，文字会直接进入电脑剪贴板，直接粘贴即可。也可以在 CrossSync 的“文字”页看到。</li>
+      </ol>
+      <p class="subtle">也可以把它加到“控制中心”或“轻点背面”，一按就发。</p>
+    </section>
+  </main>
+  <script>
+    const value = document.getElementById('auth-value');
+    document.getElementById('btn-show-auth').addEventListener('click', (event) => {
+      const shown = value.textContent === value.dataset.value;
+      value.textContent = shown ? 'Bearer ••••••••••••' : value.dataset.value;
+      event.currentTarget.textContent = shown ? '显示' : '隐藏';
+    });
+    document.getElementById('btn-copy-auth').addEventListener('click', async (event) => {
+      try {
+        await navigator.clipboard.writeText(value.dataset.value);
+        event.currentTarget.textContent = '已复制';
+      } catch (_) {
+        event.currentTarget.textContent = '复制失败';
+      }
+    });
+  </script>
+</body>
+</html>

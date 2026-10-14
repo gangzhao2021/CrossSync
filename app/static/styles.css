@@ -1454,6 +1454,94 @@ body.utility-open {
   gap: 6px;
 }
 
+/* ---- Shortcuts guide --------------------------------------------------------- */
+
+.guide-shell {
+  display: grid;
+  gap: 24px;
+  width: min(720px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 40px 0 80px;
+}
+
+.guide-back {
+  color: var(--text-3);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.guide-shell h1 {
+  font-size: 34px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.guide-lead {
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.guide-card {
+  display: grid;
+  gap: 12px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.guide-card h2 {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.guide-values {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.guide-values dt {
+  color: var(--text-3);
+}
+
+.guide-values dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.guide-shell code {
+  font-family: var(--mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.guide-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.guide-steps strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.guide-url {
+  display: block;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 /* ---- New devices ---------------------------------------------------------- */
 
 .device-requests {

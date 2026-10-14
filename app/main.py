@@ -249,6 +249,19 @@ async def app_page(request: Request):
     })
 
 
+@app.get("/shortcuts", response_class=HTMLResponse)
+async def shortcuts_guide(request: Request):
+    """How to send from the iPhone share sheet with Shortcuts, with this computer's values filled in."""
+    if not is_host_request(request):
+        raise HTTPException(status_code=403, detail="只能在运行 CrossSync 的电脑上查看")
+    host = phone_host(request)
+    port = request.url.port or settings.port
+    return templates.TemplateResponse(request, "shortcuts.html", {
+        "base_url": f"{request.url.scheme}://{host}:{port}",
+        "access_token": settings.access_token or "",
+    })
+
+
 @app.get("/healthz")
 async def healthz():
     return JSONResponse({"ok": True})
