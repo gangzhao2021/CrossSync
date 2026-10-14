@@ -23,10 +23,6 @@ function setDirection(target) {
     }
     if (els.dropTitle) els.dropTitle.textContent = '发送到电脑';
     if (els.dropSubtitle) els.dropSubtitle.textContent = '返回本页后立即上传，常亮守护会从这时开始。';
-    if (els.pickerNote) {
-      els.pickerNote.hidden = !isMobileApple;
-      els.pickerNote.textContent = '若选完后相册仍停留，通常是 iOS 正在下载或准备原片；此时网页尚未收到文件。';
-    }
   } else {
     if (els.transferTitle) els.transferTitle.textContent = '把电脑文件放进 iPhone 共享箱';
     if (els.directionCopy) els.directionCopy.textContent = '选择电脑文件，放入 iPhone 共享箱。';
@@ -104,10 +100,17 @@ async function refreshRuntimeConfig() {
   }
 }
 
-async function renameComputer() {
-  const current = runtimeConfig.hasDisplayName ? runtimeConfig.computerName : '';
-  const name = window.prompt('给这台电脑起个好记的名字，手机上会显示这个名字。留空则使用系统名称。', current);
-  if (name === null) return;
+function showRenameForm(open) {
+  if (!els.renameForm) return;
+  els.renameForm.hidden = !open;
+  if (els.renameError) els.renameError.hidden = true;
+  if (open && els.renameInput) {
+    els.renameInput.value = runtimeConfig.hasDisplayName ? runtimeConfig.computerName : '';
+    els.renameInput.focus();
+  }
+}
+
+async function renameComputer(name) {
   try {
     const data = await fetchJson('/api/config/display-name', {
       method: 'POST',
@@ -117,12 +120,25 @@ async function renameComputer() {
     runtimeConfig.computerName = data.computer_name || runtimeConfig.computerName;
     runtimeConfig.hasDisplayName = Boolean(data.has_display_name);
     renderRuntimeConfig();
+    showRenameForm(false);
   } catch (err) {
-    alert(`没能保存名称：${describeError(err)}`);
+    if (els.renameError) {
+      els.renameError.textContent = `没能保存：${describeError(err)}`;
+      els.renameError.hidden = false;
+    }
   }
 }
 
-els.btnRenameComputer?.addEventListener('click', () => void renameComputer());
+// Leaving the name empty goes back to the system name.
+els.btnRenameComputer?.addEventListener('click', () => showRenameForm(true));
+els.btnRenameCancel?.addEventListener('click', () => showRenameForm(false));
+els.renameInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') showRenameForm(false);
+});
+els.renameForm?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void renameComputer(els.renameInput?.value.trim() || '');
+});
 
 setDirection(currentDirection);
 els.dirToPC?.addEventListener('change', () => setDirection('downloads'));
@@ -144,6 +160,22 @@ if (els.chkVerify) {
 }
 
 const summaryMeter = new RateMeter();
+
+function summaryLine({ active, completed, failed, uploading, speed, eta }) {
+  if (active > 0) {
+    const parts = [`正在传输 ${active} 项`];
+    if (uploading > 0 && speed > 0) {
+      parts.push(`${formatBytes(speed)}/s`);
+      if (eta >= 1) parts.push(`还要约 ${formatEta(eta)}`);
+    } else {
+      parts.push('等待中');
+    }
+    if (completed > 0) parts.push(`已完成 ${completed} 项`);
+    return parts.join(' · ');
+  }
+  if (failed > 0) return `${failed} 项没传完${completed ? `，${completed} 项已完成` : ''}`;
+  return completed > 0 ? `${completed} 项已传完` : '准备传输';
+}
 
 function updateSummary() {
   let active = 0;
@@ -186,6 +218,9 @@ function updateSummary() {
   if (els.sumBar) {
     els.sumBar.style.width = `${pct.toFixed(2)}%`;
   }
+  if (els.liveSummaryText) els.liveSummaryText.textContent = summaryLine({ active, completed, failed, uploading, speed, eta });
+  // Failures need a click, so show them without making people open the details.
+  if (els.liveDetails && failed > 0) els.liveDetails.open = true;
 
   const pickerPreparing = currentWakeMode === 'picker';
   if (els.stagePreparingTitle) els.stagePreparingTitle.textContent = pickerPreparing ? 'iCloud 准备中' : '照片准备';
@@ -213,6 +248,7 @@ function updateSummary() {
   }
   if (els.laneUploading) els.laneUploading.dataset.active = String(uploading > 0);
   if (els.liveTransferRegion) els.liveTransferRegion.dataset.hasActive = String(active > 0 || pickerPreparing);
+  if (els.wakeBar) els.wakeBar.hidden = runtimeConfig.isHostDevice || !(active > 0 || pickerPreparing);
   if (els.btnPauseAll) els.btnPauseAll.disabled = !tasks.some((task) => ['preparing', 'active'].includes(task.state));
   if (els.btnResumeAll) els.btnResumeAll.disabled = !tasks.some((task) => task.state === 'paused');
   if (els.btnClearFinished) {
@@ -763,7 +799,7 @@ function showBatchResult(target, batchId) {
   const failed = batch.length - completed;
   if (!batch.length) return;
   els.batchResult.dataset.batch = String(batchId);
-  const where = target === 'downloads' ? '电脑' : ' iPhone 共享箱';
+  const where = target === 'downloads' ? '电脑' : '共享箱，iPhone 可以下载了';
   const allDone = failed === 0;
   els.batchResult.dataset.tone = allDone ? 'success' : 'warning';
   els.batchResult.dataset.target = target;
@@ -781,11 +817,11 @@ function showBatchResult(target, batchId) {
   if (els.batchResultCopy) {
     const location = target === 'downloads'
       ? (runtimeConfig.isHostDevice && runtimeConfig.downloadsDir ? `保存在 ${runtimeConfig.downloadsDir}` : '可以在电脑的接收文件夹里找到。')
-      : 'iPhone 打开本页后可在共享箱下载。';
+      : 'iPhone 打开 CrossSync，点“从电脑接收”就能看到。';
     const skipped = duplicates && duplicates < completed ? `其中 ${duplicates} 项电脑上已有，没有重复保存。` : '';
     els.batchResultCopy.textContent = allDone
       ? `${skipped}${location}`
-      : `${skipped}未完成的项目会在连接恢复后自动重试，也可以在下方任务卡片里手动重试。`;
+      : `${skipped}连接恢复后会自动接着传，也可以在“查看每个文件”里手动重试。`;
   }
   if (els.btnBatchOpen) els.btnBatchOpen.hidden = !runtimeConfig.isHostDevice;
   els.batchResult.hidden = false;
@@ -813,11 +849,10 @@ els.btnBatchOpen?.addEventListener('click', async () => {
   }
 });
 els.btnBatchView?.addEventListener('click', () => {
-  if (els.batchResult?.dataset.target === 'outbox') {
-    setUtilityDrawer(true);
-  } else {
-    document.querySelector('.recent-transfers')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  const area = els.batchResult?.dataset.target === 'outbox' ? 'outbox' : 'downloads';
+  showView(area);
+  const view = area === 'outbox' ? els.viewOutbox : els.viewDownloads;
+  view?.querySelector('.recent-transfers')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
 // When the computer comes back, retry uploads that failed only because it was unreachable.
@@ -871,26 +906,44 @@ function preventDefaults(event) {
 }
 
 if (els.dzUpload && els.inputUpload) {
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach((eventName) => {
-    els.dzUpload.addEventListener(eventName, preventDefaults);
+  // Files can be dropped anywhere on the window. The computer itself only ever
+  // sends to the iPhone; a phone or another computer sends to this computer.
+  const dropTarget = () => (runtimeConfig.isHostDevice ? 'outbox' : 'downloads');
+  const carriesFiles = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
+  let dragDepth = 0;
+  document.addEventListener('dragenter', (event) => {
+    if (!carriesFiles(event)) return;
+    preventDefaults(event);
+    dragDepth += 1;
+    document.body.classList.add('is-dragging');
+    document.body.dataset.dropTarget = dropTarget();
   });
-  ['dragenter', 'dragover'].forEach((eventName) => {
-    els.dzUpload.addEventListener(eventName, () => els.dzUpload.classList.add('dragover'));
+  document.addEventListener('dragover', (event) => {
+    if (carriesFiles(event)) preventDefaults(event);
   });
-  ['dragleave', 'drop'].forEach((eventName) => {
-    els.dzUpload.addEventListener(eventName, () => els.dzUpload.classList.remove('dragover'));
+  document.addEventListener('dragleave', (event) => {
+    if (!carriesFiles(event)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) document.body.classList.remove('is-dragging');
   });
-  els.dzUpload.addEventListener('drop', async (event) => {
+  document.addEventListener('drop', async (event) => {
+    if (!carriesFiles(event)) return;
+    preventDefaults(event);
+    dragDepth = 0;
+    document.body.classList.remove('is-dragging');
+    const target = dropTarget();
+    if (target === 'outbox') showView('outbox');
     const files = await extractDroppedFiles(event.dataTransfer);
-    handleFiles(files.length ? files : [...event.dataTransfer.files], 'downloads');
-  });
-  els.dzUpload.addEventListener('click', (event) => {
-    if (event.target === els.inputUpload) return;
-    if (event.target.closest?.('.workspace-upload-action, .pick-btn, .choose-photos-button')) return;
-    els.inputUpload.click();
+    handleFiles(files.length ? files : [...event.dataTransfer.files], target);
   });
   els.btnChooseUpload?.addEventListener('click', (event) => {
     event.stopPropagation();
+    els.inputUpload.setAttribute('accept', 'image/*,video/*');
+    els.inputUpload.click();
+  });
+  els.btnChooseAnyFile?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    els.inputUpload.removeAttribute('accept');
     els.inputUpload.click();
   });
   els.inputUpload.addEventListener('click', () => wakeKeeper.suspendForPicker());

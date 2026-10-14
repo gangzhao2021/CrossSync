@@ -113,6 +113,19 @@ const els = {
   sumSpeed: $('sum-speed'),
   sumEta: $('sum-eta'),
   sumBar: $('sum-bar'),
+  liveSummaryText: $('live-summary-text'),
+  liveDetails: $('live-details'),
+  viewDownloads: $('view-downloads'),
+  viewOutbox: $('view-outbox'),
+  transferFeedback: $('transfer-feedback'),
+  outboxFeedbackSlot: $('outbox-feedback-slot'),
+  btnChooseAnyFile: $('btn-choose-any-file'),
+  renameForm: $('rename-form'),
+  renameInput: $('rename-input'),
+  renameError: $('rename-error'),
+  btnRenameCancel: $('btn-rename-cancel'),
+  wakeBar: $('wake-bar'),
+  securityCopy: $('security-copy'),
 };
 
 const tasks = [];
@@ -615,46 +628,34 @@ let currentWakeMode = 'off';
 function updateReadiness(mode = 'off') {
   currentWakeMode = mode;
   if (!els.readinessCard) return;
+  // Plain words: the bar only shows while something is being sent.
   let tone = 'idle';
-  let title = '传输开始时自动常亮';
-  let copy = hasTrustedHttpsContext() && 'wakeLock' in navigator
-    ? '已具备原生常亮能力；传输期间请保持 CrossSync 在前台。'
-    : '当前只能使用视频守护，iOS 仍可能锁屏；建议使用 HTTPS 并添加到主屏幕。';
-  let button = '立即开启';
+  let title = '传输中请保持屏幕亮着';
+  let copy = '锁屏或切到别的 App 会让传输暂停。';
+  let button = '防止锁屏';
 
   if (mode === 'starting') {
-    tone = 'warning';
-    title = '正在开启常亮守护';
-    copy = '正在向系统申请屏幕常亮权限。';
-  } else if (mode === 'native') {
+    title = '正在打开防锁屏';
+    copy = '马上就好。';
+  } else if (mode === 'native' || mode === 'native+video') {
     tone = 'active';
-    title = '原生常亮已开启';
-    copy = '系统 Wake Lock 正在工作；不要切到其他 App 或手动锁屏。';
-    button = '关闭常亮';
-  } else if (mode === 'native+video') {
-    tone = 'active';
-    title = '双重常亮守护已开启';
-    copy = '原生 Wake Lock 与视频守护同时工作；传输期间保持本页前台。';
-    button = '关闭常亮';
+    title = '屏幕会一直亮着';
+    copy = '传完前别切到别的 App。';
+    button = '关闭';
   } else if (mode === 'video') {
+    tone = 'active';
+    title = '已尽量防止锁屏';
+    copy = '传完前别切到别的 App，也别按锁屏键。';
+    button = '关闭';
+  } else if (mode === 'blocked' || mode === 'released') {
     tone = 'warning';
-    title = '视频守护已开启';
-    copy = '这是兼容模式，不能完全保证 iOS 不锁屏；HTTPS 主屏幕模式更可靠。';
-    button = '关闭常亮';
-  } else if (mode === 'blocked') {
-    tone = 'warning';
-    title = '常亮未能启用';
-    copy = '请点“重新开启”，并确认没有开启低电量模式。';
-    button = '重新开启';
+    title = '屏幕可能会自动锁上';
+    copy = '点右边按钮再试一次；低电量模式下可能无效。';
+    button = '再试一次';
   } else if (mode === 'picker') {
-    title = '正在由 iOS 准备照片';
-    copy = '相册返回网页后才会启动常亮和传输。';
-    button = '等待返回';
-  } else if (mode === 'released') {
-    tone = 'warning';
-    title = '常亮被系统释放';
-    copy = '回到本页并点一下即可重新开启。';
-    button = '重新开启';
+    title = '正在从相册取出照片';
+    copy = 'iCloud 里的照片要先下载，可能要等一会儿。';
+    button = '请稍候';
   }
 
   els.readinessCard.dataset.tone = tone;
@@ -674,17 +675,18 @@ function renderEnvironmentStatus() {
 
   if (els.securityBadge) {
     const label = els.securityBadge.querySelector('strong') || els.securityBadge;
-    // The short form keeps the status bar on one line on narrow phones.
-    label.replaceChildren(
-      h('span', { class: 'label-full', text: secure ? 'HTTPS 加密连接' : '本地连接 · 未加密' }),
-      h('span', { class: 'label-short', text: secure ? '已加密' : '未加密' }),
-    );
+    label.textContent = secure ? '已使用加密连接' : '当前是普通连接（未加密）';
     els.securityBadge.classList.toggle('warning', !secure);
+  }
+  if (els.securityCopy) {
+    els.securityCopy.textContent = secure
+      ? '文件只在你的局域网里传输，不经过任何服务器。'
+      : '文件只在你的局域网里传输，不经过任何服务器，日常使用没问题。开启加密连接后，照片能直接存进相册，屏幕常亮也更可靠。';
   }
   if (els.appModeBadge) {
     els.appModeBadge.textContent = standalone ? '主屏幕应用' : '浏览器模式';
   }
-  if (els.caDownload) els.caDownload.hidden = !runtimeConfig.caCertificateAvailable;
+  if (els.caDownload) els.caDownload.hidden = secure || !runtimeConfig.caCertificateAvailable;
   if (els.installGuide) els.installGuide.hidden = !isAppleMobile() || standalone;
   if (els.btnInstallApp) {
     els.btnInstallApp.textContent = deferredInstallPrompt ? '安装应用' : '查看安装步骤';

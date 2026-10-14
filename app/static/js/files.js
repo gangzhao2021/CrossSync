@@ -97,7 +97,11 @@ const areaState = {
     total: 0,
     // The receive folder can be a large personal folder; show the newest files only.
     limit: 200,
-    empty: '电脑接收区暂无文件',
+    get empty() {
+      return runtimeConfig.isHostDevice
+        ? '还没有收到文件。点右上角“扫码”，用 iPhone 扫一下就能开始发。'
+        : '电脑上还没有收到文件。';
+    },
   },
   outbox: {
     list: $('outbox-list'),
@@ -118,7 +122,11 @@ const areaState = {
     files: [],
     total: 0,
     limit: 500,
-    empty: 'iPhone 共享箱暂无文件',
+    get empty() {
+      return runtimeConfig.isHostDevice
+        ? '还没有放文件。点上面的按钮，或者把文件拖进窗口。'
+        : '电脑还没有发来文件。';
+    },
   },
 };
 
@@ -448,15 +456,47 @@ els.btnChooseDownloads?.addEventListener('click', async () => {
 });
 
 refreshRuntimeConfig().finally(() => {
+  // Empty-list wording depends on which device this is, which is only known now.
+  ['downloads', 'outbox'].forEach((area) => {
+    if (!areaState[area].files.length) renderArea(area);
+  });
   refreshArea('downloads');
   refreshArea('outbox');
 });
 
-$('nav-to-computer')?.addEventListener('click', () => {
-  setDirection('downloads');
-  els.dzUpload?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  els.btnChooseUpload?.focus({ preventScroll: true });
-});
+// --- The two pages: "downloads" (to the computer) and "outbox" (to the iPhone) ---
+
+let currentView = 'downloads';
+const feedbackHome = { parent: els.transferFeedback?.parentNode, next: els.transferFeedback?.nextSibling };
+
+function showView(view) {
+  currentView = view === 'outbox' ? 'outbox' : 'downloads';
+  const outbox = currentView === 'outbox';
+  if (els.viewDownloads) els.viewDownloads.hidden = outbox;
+  if (els.viewOutbox) els.viewOutbox.hidden = !outbox;
+  [[$('nav-to-computer'), !outbox], [els.btnSendToIphone, outbox]].forEach(([tab, active]) => {
+    if (!tab) return;
+    tab.classList.toggle('is-active', active);
+    if (active) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  });
+  // Progress and results belong to whichever page started the transfer.
+  if (els.transferFeedback) {
+    if (outbox) els.outboxFeedbackSlot?.append(els.transferFeedback);
+    else feedbackHome.parent?.insertBefore(els.transferFeedback, feedbackHome.next);
+  }
+  setDirection(currentView);
+  const hash = outbox ? '#iphone' : '';
+  if (window.location.hash !== hash) history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`);
+  if (outbox) {
+    updateShareNotice();
+    void refreshArea('outbox');
+  }
+  window.scrollTo({ top: 0 });
+}
+
+$('nav-to-computer')?.addEventListener('click', () => showView('downloads'));
+showView(window.location.hash === '#iphone' ? 'outbox' : 'downloads');
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || !els.utilityDrawer?.open) return;
@@ -536,7 +576,7 @@ function markShareSeen() {
 }
 
 function updateShareNotice() {
-  if (!runtimeConfig.isHostDevice && els.utilityDrawer?.open) markShareSeen();
+  if (!runtimeConfig.isHostDevice && currentView === 'outbox') markShareSeen();
   const unseen = runtimeConfig.isHostDevice ? 0 : countUnseen(areaState.outbox.files, shareSeenMtime());
   if (els.shareBadge) {
     els.shareBadge.hidden = unseen === 0;
@@ -549,10 +589,7 @@ function updateShareNotice() {
 }
 
 function openShareBox() {
-  setUtilityDrawer(true);
-  window.setTimeout(() => document.querySelector('.outbox-section')?.scrollIntoView({ block: 'start' }), 60);
-  updateShareNotice();
-  void refreshArea('outbox');
+  showView('outbox');
 }
 
 els.btnShareNotice?.addEventListener('click', () => openShareBox());

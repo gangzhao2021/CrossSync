@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#151517" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -17,296 +17,260 @@
 </head>
 <body class="transfer-workspace-body">
   <div class="transfer-shell">
-    <aside class="workspace-sidebar" aria-label="CrossSync 导航">
-      <a class="workspace-brand" href="/" aria-label="返回扫码界面" title="返回扫码界面">
-        <img src="/static/app-icon-192.png" alt="" />
-        <strong>CrossSync</strong>
-      </a>
+    <header class="topbar">
+      <a class="topbar-brand" href="/" title="返回扫码界面">CrossSync</a>
 
-      <nav class="direction-nav" aria-label="传输方向">
-        <button id="nav-to-computer" class="direction-nav-item is-active" type="button" aria-current="page">
-          <img src="/static/icons/tabler/device-desktop.svg" alt="" />
-          <span><span class="nav-label-prefix">发送</span>到电脑</span>
+      <!-- Two real pages. On the computer: what arrived, and sending to the iPhone.
+           On the iPhone: sending to the computer, and what the computer sent. -->
+      <nav class="topnav" aria-label="页面">
+        <button id="nav-to-computer" class="topnav-item is-active" type="button" aria-controls="view-downloads" aria-current="page">
+          <span class="label-host">收到的文件</span><span class="label-phone">发到电脑</span>
         </button>
-        <button id="btn-send-to-iphone" class="direction-nav-item" type="button">
-          <img src="/static/icons/tabler/device-mobile.svg" alt="" />
-          <!-- The computer sends to the iPhone; the iPhone receives from the computer. -->
-          <span class="label-host"><span class="nav-label-prefix">发送</span>到 iPhone</span>
-          <span class="label-phone"><span class="nav-label-prefix">从电脑</span>接收</span>
+        <button id="btn-send-to-iphone" class="topnav-item" type="button" aria-controls="view-outbox">
+          <span class="label-host">发到 iPhone</span><span class="label-phone">从电脑接收</span>
           <span id="share-badge" class="nav-badge" hidden></span>
         </button>
         <input id="input-outbox" type="file" multiple hidden />
       </nav>
 
-      <div class="sidebar-bottom">
-        <button id="btn-settings" class="direction-nav-item secondary" type="button" aria-label="文件管理" title="文件管理" aria-controls="utility-drawer" aria-expanded="false">
-          <img src="/static/icons/tabler/folder.svg" alt="" />
-          <span>文件管理</span>
-        </button>
-        <button id="theme-toggle" class="sidebar-icon-button" type="button" title="切换主题" aria-label="切换主题">
+      <div class="topbar-tools">
+        <a class="topbar-link host-only" href="/" title="让 iPhone 扫码连接">扫码</a>
+        <button id="btn-settings" class="topbar-link" type="button" aria-controls="utility-drawer" aria-expanded="false">设置</button>
+        <button id="theme-toggle" class="icon-btn" type="button" title="切换主题" aria-label="切换主题">
           <img id="theme-icon" src="/static/icons/tabler/moon.svg" alt="" />
         </button>
       </div>
-    </aside>
+    </header>
 
     <div class="workspace-main">
-      <header class="workspace-statusbar">
-        <a class="statusbar-back host-only" href="/" aria-label="返回扫码界面" title="返回扫码界面">
-          <img src="/static/icons/tabler/home.svg" alt="" />
-          <span class="desktop-scan-label">返回扫码页</span>
-          <span class="mobile-scan-label">扫码</span>
-        </a>
-        <div id="connection-status" class="statusbar-item connected" role="status" aria-live="polite">
-          <img src="/static/icons/tabler/wifi.svg" alt="" />
-          <strong><span id="computer-name" class="statusbar-computer-name">这台电脑</span> <span id="connection-label">已连接</span></strong>
-        </div>
-        <span class="statusbar-divider" aria-hidden="true"></span>
-        <div id="security-badge" class="statusbar-item" role="status">
-          <img src="/static/icons/tabler/shield-check.svg" alt="" />
-          <strong>检查本地连接</strong>
-        </div>
-        <span class="statusbar-divider" aria-hidden="true"></span>
-        <div class="statusbar-caption">局域网直连，不经过云端</div>
-        <span id="app-mode-badge" class="sr-only">浏览器模式</span>
-      </header>
-
       <main class="transfer-home">
-        <section class="transfer-hero" aria-labelledby="transfer-title-main">
-          <div class="transfer-heading">
-            <h1 id="transfer-title-main">发送到 <span id="computer-name-heading">这台电脑</span></h1>
-            <button id="btn-rename-computer" class="inline-action rename-action host-only" type="button">起个好记的名字</button>
-            <div class="destination-line">
-              <img src="/static/icons/tabler/device-desktop.svg" alt="" />
-              <span>保存到</span>
-              <strong id="downloads-path">正在读取保存位置…</strong>
-              <button id="btn-choose-downloads" class="inline-action" type="button" hidden>更改</button>
-            </div>
-            <p id="downloads-path-status" class="destination-status" aria-live="polite">手机传完后会直接出现在这个文件夹。</p>
-            <span id="downloads-free" class="sr-only">可用空间正在读取…</span>
-          </div>
+        <div class="transfer-hero">
+          <p class="status-line">
+            <span id="connection-status" class="status-item connected" role="status" aria-live="polite">
+              <span id="computer-name">这台电脑</span> · <span id="connection-label">已连接</span>
+            </span>
+            <button id="btn-rename-computer" class="inline-action host-only" type="button">起个好记的名字</button>
+            <span id="app-mode-badge" class="sr-only">浏览器模式</span>
+          </p>
+          <form id="rename-form" class="rename-form" hidden>
+            <label class="sr-only" for="rename-input">电脑名称</label>
+            <input id="rename-input" type="text" maxlength="40" placeholder="比如：书房电脑" autocomplete="off" />
+            <button class="btn small primary" type="submit">保存</button>
+            <button id="btn-rename-cancel" class="btn small ghost" type="button">取消</button>
+            <p id="rename-error" class="rename-error" hidden></p>
+          </form>
 
-          <div id="share-notice" class="share-notice" role="status" aria-live="polite" hidden>
-            <img src="/static/icons/tabler/cloud-download.svg" alt="" />
-            <span id="share-notice-text">电脑发来了新文件</span>
-            <button id="btn-share-notice" class="btn small primary" type="button">查看</button>
-          </div>
-
-          <div id="dropzone-upload" class="workspace-dropzone">
-            <input id="input-upload" type="file" accept="image/*,video/*" multiple hidden />
-            <button id="btn-choose-upload" class="workspace-upload-action" type="button">
-              <span class="upload-icon-wrap" aria-hidden="true">
-                <img src="/static/icons/tabler/photo.svg" alt="" />
-              </span>
-              <span class="upload-button-copy">选择照片或文件</span>
-            </button>
-            <p class="drop-hint"><span class="desktop-drop-hint">拖放到这里也可以</span><span class="mobile-drop-hint">可一次选择多张；选完点右上角“添加”，返回后自动上传</span></p>
-            <div class="selection-copy" aria-live="polite">
-              <strong>已选择 <span id="selected-count">0</span> 项</strong>
-              <span id="selected-meta">选择照片或视频后会立即回到 CrossSync</span>
-            </div>
-            <div id="selected-media-grid" class="selected-media-grid" aria-live="polite">
-              <div class="media-empty">所选内容会在这里预览</div>
-            </div>
-            <div class="sr-only">
-              <strong id="drop-title">发送到电脑</strong>
-              <span id="drop-subtitle">返回本页后立即上传。</span>
-            </div>
-          </div>
-
-
-          <p id="picker-note" class="picker-note" role="status" aria-live="polite" hidden></p>
-
-          <div id="batch-result" class="batch-result" role="status" aria-live="polite" data-tone="success" hidden>
-            <img id="batch-result-icon" src="/static/icons/tabler/circle-check.svg" alt="" />
-            <div class="batch-result-copy">
-              <strong id="batch-result-title">已保存</strong>
-              <p id="batch-result-copy"></p>
-            </div>
-            <div class="batch-result-actions">
-              <button id="btn-batch-again" class="btn small primary" type="button">再传一批</button>
-              <button id="btn-batch-open" class="btn small" type="button" hidden>打开文件夹</button>
-              <button id="btn-batch-view" class="btn small ghost" type="button">查看文件</button>
-            </div>
-          </div>
-
-          <div id="pending-resume" class="pending-resume" hidden>
-            <div>
-              <strong><span id="pending-resume-count">0</span> 个传输等待续传</strong>
-              <p id="pending-resume-list">重新选择同一批照片后，将从已完成的分片继续。</p>
-            </div>
-            <button id="btn-pick-to-resume" class="btn small primary" type="button">重新选择并续传</button>
-          </div>
-
-          <div id="install-guide" class="install-guide workspace-install-guide" hidden>
-            <div>
-              <strong>添加到主屏幕，常亮更稳定</strong>
-              <p id="install-copy">在 Safari 分享菜单中选择“添加到主屏幕”。</p>
-            </div>
-            <div class="install-actions">
-              <button id="btn-install-app" class="btn small primary" type="button">安装应用</button>
-              <a id="ca-download" class="btn small ghost" href="/ca.crt" hidden>安装信任证书</a>
-            </div>
-          </div>
-
-          <section id="transfer-live-region" class="transfer-live-region" data-has-active="false" aria-labelledby="live-transfer-title">
-            <div class="live-transfer-head">
-              <div>
-                <h2 id="live-transfer-title">当前传输</h2>
-              </div>
-              <div class="live-transfer-summary" aria-live="polite">
-                <span><b id="sum-active">0</b> 进行中</span>
-                <span><b id="sum-completed">0</b> 已完成</span>
-                <span><b id="sum-failed">0</b> 失败</span>
-                <span>速度 <b id="sum-speed">—</b></span>
-                <span>剩余 <b id="sum-eta">—</b></span>
-              </div>
-            </div>
-            <div class="bar live-summary-bar"><div id="sum-bar"></div></div>
-
-            <div class="compact-stages" aria-label="传输阶段">
-              <article id="lane-preparing" class="compact-stage" data-active="false" hidden>
-                <img src="/static/icons/tabler/cloud-download.svg" alt="" />
-                <div><strong id="stage-preparing-title">照片准备</strong><small id="stage-preparing-copy">等待 iOS 返回所选文件</small></div>
-                <b id="stage-preparing-count">0</b>
-                <span class="stage-bar"><i id="stage-preparing-bar"></i></span>
-              </article>
-              <article id="lane-waiting" class="compact-stage" data-active="false" hidden>
-                <img src="/static/icons/tabler/clock.svg" alt="" />
-                <div><strong>等待传输</strong><small id="stage-waiting-copy">就绪文件会自动开始传输</small></div>
-                <b id="stage-waiting-count">0</b>
-                <span class="stage-bar"><i id="stage-waiting-bar"></i></span>
-              </article>
-              <article id="lane-uploading" class="compact-stage" data-active="false">
-                <img src="/static/icons/tabler/upload.svg" alt="" />
-                <div><strong>上传中</strong><small id="stage-upload-copy">局域网直写电脑保存位置</small></div>
-                <b><span id="stage-upload-count">0</span><span id="stage-speed-inline"></span></b>
-                <span class="stage-bar"><i id="stage-upload-bar"></i></span>
-              </article>
+          <section id="view-downloads" class="view" aria-labelledby="transfer-title-main">
+            <div class="view-heading">
+              <h1 id="transfer-title-main"><span class="label-host">手机发来的文件</span><span class="label-phone">发送照片到电脑</span><span id="computer-name-heading" hidden></span></h1>
+              <p class="destination-line">
+                <span>保存在</span>
+                <strong id="downloads-path">正在读取保存位置…</strong>
+                <button id="btn-choose-downloads" class="inline-action" type="button" hidden>更改</button>
+              </p>
+              <p id="downloads-path-status" class="sr-only" aria-live="polite">手机传完后会直接出现在这个文件夹。</p>
+              <span id="downloads-free" class="sr-only">可用空间正在读取…</span>
             </div>
 
-            <div id="upload-list" class="task-list" aria-live="polite"></div>
-            <div class="queue-actions live-queue-actions">
-              <button id="btn-pause-all" class="btn small" type="button" disabled>暂停全部</button>
-              <button id="btn-resume-all" class="btn small" type="button" disabled>继续全部</button>
-              <button id="btn-clear-finished" class="btn small ghost" type="button" disabled>清理已结束项</button>
+            <div id="share-notice" class="share-notice" role="status" aria-live="polite" hidden>
+              <span id="share-notice-text">电脑发来了新文件</span>
+              <button id="btn-share-notice" class="btn small" type="button">查看</button>
             </div>
-          </section>
 
-          <section class="recent-transfers" aria-labelledby="recent-title">
-            <div class="recent-header">
-              <div>
-                <h2 id="recent-title">最近传输</h2>
-              </div>
-              <div class="recent-actions">
-                <button id="btn-enable-notify" class="btn small ghost" type="button" hidden>开启到达提醒</button>
-                <button id="btn-open-downloads" class="icon-btn" type="button" title="打开目录" aria-label="打开目录">
-                  <img src="/static/icons/tabler/folder-open.svg" alt="" />
+            <div id="dropzone-upload" class="workspace-dropzone remote-only">
+              <input id="input-upload" type="file" accept="image/*,video/*" multiple hidden />
+              <div class="upload-row">
+                <button id="btn-choose-upload" class="workspace-upload-action" type="button">
+                  <span class="upload-button-copy">选择照片和视频</span>
                 </button>
-                <button id="btn-refresh-downloads" class="icon-btn" type="button" title="刷新" aria-label="刷新">
-                  <img src="/static/icons/tabler/refresh.svg" alt="" />
-                </button>
-                <details id="more-actions-dl" class="more-actions">
-                  <summary class="btn small ghost">管理</summary>
-                  <div class="more-menu">
-                    <button id="btn-selectall-dl" class="btn small" type="button">全选</button>
-                    <button id="btn-invert-dl" class="btn small" type="button">反选</button>
-                    <button id="btn-selectnone-dl" class="btn small ghost" type="button">取消选择</button>
-                    <button id="btn-download-dl-selected" class="btn small" type="button" disabled>下载选中</button>
-                    <button id="btn-del-dl-selected" class="btn small danger" type="button" disabled>删除选中（进回收站）</button>
-                    <button id="btn-download-dl-all" class="btn small" type="button" disabled>下载全部</button>
-                    <button id="btn-clear-dl" class="btn small danger host-only" type="button" disabled title="只处理 CrossSync 传入的文件">清空已传入文件</button>
+                <button id="btn-choose-any-file" class="btn" type="button">选择其他文件</button>
+              </div>
+              <p class="drop-hint"><span class="desktop-drop-hint">也可以把文件拖到窗口任意位置</span><span class="mobile-drop-hint">可以一次选多张，选好点右上角“添加”</span></p>
+              <div class="selection-copy" aria-live="polite">
+                <strong>已选择 <span id="selected-count">0</span> 项</strong>
+                <span id="selected-meta"></span>
+              </div>
+              <div id="selected-media-grid" class="selected-media-grid" aria-live="polite">
+                <div class="media-empty"></div>
+              </div>
+              <div class="sr-only">
+                <strong id="drop-title">发送到电脑</strong>
+                <span id="drop-subtitle">返回本页后立即上传。</span>
+              </div>
+            </div>
+
+            <!-- Moved into whichever page is showing, see showView(). -->
+            <div id="transfer-feedback" class="transfer-feedback">
+              <p id="picker-note" class="picker-note" role="status" aria-live="polite" hidden></p>
+
+              <div id="batch-result" class="batch-result" role="status" aria-live="polite" data-tone="success" hidden>
+                <img id="batch-result-icon" src="/static/icons/tabler/circle-check.svg" alt="" />
+                <div class="batch-result-copy">
+                  <strong id="batch-result-title">已保存</strong>
+                  <p id="batch-result-copy"></p>
+                </div>
+                <div class="batch-result-actions">
+                  <button id="btn-batch-again" class="btn small primary" type="button">再传一批</button>
+                  <button id="btn-batch-open" class="btn small" type="button" hidden>打开文件夹</button>
+                  <button id="btn-batch-view" class="btn small ghost" type="button">查看文件</button>
+                </div>
+              </div>
+
+              <div id="pending-resume" class="pending-resume" hidden>
+                <div>
+                  <strong><span id="pending-resume-count">0</span> 个文件没传完</strong>
+                  <p id="pending-resume-list">重新选择同一批照片，会接着上次的进度继续。</p>
+                </div>
+                <button id="btn-pick-to-resume" class="btn small primary" type="button">重新选择</button>
+              </div>
+
+              <section id="transfer-live-region" class="transfer-live-region" data-has-active="false" aria-labelledby="live-transfer-title">
+                <h2 id="live-transfer-title" class="sr-only">传输进度</h2>
+                <p id="live-summary-text" class="live-summary-text" aria-live="polite">正在传输</p>
+                <div class="bar live-summary-bar"><div id="sum-bar"></div></div>
+                <details id="live-details" class="live-details">
+                  <summary>查看每个文件</summary>
+                  <div id="upload-list" class="task-list" aria-live="polite"></div>
+                  <div class="queue-actions live-queue-actions">
+                    <button id="btn-pause-all" class="btn small" type="button" disabled>全部暂停</button>
+                    <button id="btn-resume-all" class="btn small" type="button" disabled>全部继续</button>
+                    <button id="btn-clear-finished" class="btn small ghost" type="button" disabled>清除已完成</button>
                   </div>
                 </details>
+              </section>
+            </div>
+
+            <div id="install-guide" class="install-guide" hidden>
+              <div>
+                <strong>添加到主屏幕，传输更稳</strong>
+                <p id="install-copy">在 Safari 分享菜单里选“添加到主屏幕”。</p>
+              </div>
+              <div class="install-actions">
+                <button id="btn-install-app" class="btn small" type="button">怎么添加</button>
               </div>
             </div>
-            <div class="selbar" id="selbar-dl" hidden>
-              <span>已选 <strong id="selcount-dl">0</strong></span><div class="grow"></div>
-              <button id="btn-dl-del-quick" class="btn small danger" type="button">删除</button>
-              <button id="btn-dl-cancel-sel" class="btn small ghost" type="button">取消</button>
-            </div>
-            <div id="downloads-list" class="file-list recent-file-list"></div>
+
+            <section class="recent-transfers" aria-labelledby="recent-title">
+              <div class="recent-header">
+                <h2 id="recent-title"><span class="label-host">最近收到</span><span class="label-phone">已在电脑上的文件</span></h2>
+                <div class="recent-actions">
+                  <button id="btn-enable-notify" class="btn small ghost" type="button" hidden>开启到达提醒</button>
+                  <button id="btn-open-downloads" class="icon-btn host-only" type="button" title="打开文件夹" aria-label="打开文件夹">
+                    <img src="/static/icons/tabler/folder-open.svg" alt="" />
+                  </button>
+                  <button id="btn-refresh-downloads" class="icon-btn" type="button" title="刷新" aria-label="刷新">
+                    <img src="/static/icons/tabler/refresh.svg" alt="" />
+                  </button>
+                  <details id="more-actions-dl" class="more-actions">
+                    <summary class="btn small ghost">管理</summary>
+                    <div class="more-menu">
+                      <button id="btn-selectall-dl" class="btn small" type="button">全选</button>
+                      <button id="btn-invert-dl" class="btn small" type="button">反选</button>
+                      <button id="btn-selectnone-dl" class="btn small ghost" type="button">取消选择</button>
+                      <button id="btn-download-dl-selected" class="btn small" type="button" disabled>下载选中</button>
+                      <button id="btn-del-dl-selected" class="btn small danger" type="button" disabled>删除选中（进回收站）</button>
+                      <button id="btn-download-dl-all" class="btn small" type="button" disabled>下载全部</button>
+                      <button id="btn-clear-dl" class="btn small danger host-only" type="button" disabled title="只处理 CrossSync 传入的文件">清空已传入文件</button>
+                    </div>
+                  </details>
+                </div>
+              </div>
+              <div class="selbar" id="selbar-dl" hidden>
+                <span>已选 <strong id="selcount-dl">0</strong></span><div class="grow"></div>
+                <button id="btn-dl-del-quick" class="btn small danger" type="button">删除</button>
+                <button id="btn-dl-cancel-sel" class="btn small ghost" type="button">取消</button>
+              </div>
+              <div id="downloads-list" class="file-list recent-file-list"></div>
+            </section>
           </section>
-        </section>
+
+          <section id="view-outbox" class="view outbox-section" aria-labelledby="outbox-title" hidden>
+            <div class="view-heading">
+              <h1 id="outbox-title"><span class="label-host">发送文件到 iPhone</span><span class="label-phone">电脑发来的文件</span></h1>
+              <p class="view-copy label-host">放进来的文件，iPhone 打开 CrossSync 点“从电脑接收”就能下载。</p>
+              <p class="view-copy label-phone">照片和视频点“存到相册”，其他文件点名字下载到“文件”App。</p>
+              <p id="share-https-hint" class="view-copy label-phone" hidden>开启加密连接后，照片和视频才能直接存进相册，见“设置”。</p>
+            </div>
+
+            <div class="upload-row host-only">
+              <button id="btn-outbox-add" class="workspace-upload-action" type="button">
+                <span class="upload-button-copy">选择要发送的文件</span>
+              </button>
+              <p class="drop-hint">也可以把文件拖到窗口任意位置</p>
+            </div>
+
+            <div id="outbox-feedback-slot"></div>
+
+            <section class="recent-transfers" aria-labelledby="outbox-list-title">
+              <div class="section-head">
+                <h2 id="outbox-list-title"><span class="label-host">iPhone 可以下载的文件</span><span class="label-phone">文件</span></h2>
+                <div class="toolbar">
+                  <button id="btn-open-outbox" class="icon-btn host-only" type="button" title="打开文件夹" aria-label="打开文件夹"><img src="/static/icons/tabler/folder-open.svg" alt="" /></button>
+                  <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /></button>
+                  <button id="btn-photos-ob-selected" class="btn small primary" type="button" disabled hidden>选中的存到相册</button>
+                  <button id="btn-download-ob-selected" class="btn small" type="button" disabled>下载选中</button>
+                  <button id="btn-del-ob-selected" class="btn small danger" type="button" disabled>删除选中</button>
+                  <button id="btn-download-ob-all" class="btn small" type="button" disabled>下载全部</button>
+                  <details id="more-actions-ob" class="more-actions">
+                    <summary class="btn small ghost">管理</summary>
+                    <div class="more-menu">
+                      <button id="btn-selectall-ob" class="btn small" type="button">全选</button>
+                      <button id="btn-invert-ob" class="btn small" type="button">反选</button>
+                      <button id="btn-selectnone-ob" class="btn small ghost" type="button">取消选择</button>
+                      <button id="btn-clear-ob" class="btn small danger host-only" type="button" disabled title="只处理 CrossSync 传入的文件">清空已传入文件</button>
+                    </div>
+                  </details>
+                </div>
+              </div>
+              <div class="selbar" id="selbar-ob" hidden>
+                <span>已选 <strong id="selcount-ob">0</strong></span><div class="grow"></div>
+                <button id="btn-ob-del-quick" class="btn small danger" type="button">删除</button>
+                <button id="btn-ob-cancel-sel" class="btn small ghost" type="button">取消</button>
+              </div>
+              <div id="outbox-list" class="file-list"></div>
+            </section>
+          </section>
+        </div>
       </main>
 
-      <footer class="workspace-footer">
-        <div id="transfer-readiness" class="readiness-card workspace-readiness" data-tone="idle">
+      <!-- Only while a transfer runs on the iPhone. -->
+      <footer id="wake-bar" class="workspace-footer" hidden>
+        <div id="transfer-readiness" class="readiness-card" data-tone="idle">
           <span class="readiness-orb" aria-hidden="true"></span>
           <div class="readiness-copy">
-            <strong id="readiness-title">正在检查常亮能力</strong>
-            <p id="readiness-copy">传输开始后会自动防止屏幕休眠。</p>
+            <strong id="readiness-title">传输中请保持屏幕亮着</strong>
+            <p id="readiness-copy">锁屏或切到别的 App 会让传输暂停。</p>
           </div>
-          <button id="btn-enable-wake" class="btn small" type="button">立即开启</button>
+          <button id="btn-enable-wake" class="btn small" type="button">防止锁屏</button>
         </div>
         <button id="wake-toggle" class="wake-compact-button" type="button" aria-pressed="false">
-          <img src="/static/icons/tabler/sun.svg" alt="" />
           <span>屏幕常亮 · <b id="wake-status">未启用</b></span>
         </button>
       </footer>
 
       <div id="utility-backdrop" class="utility-backdrop" hidden></div>
-      <details id="utility-drawer" class="utility-drawer workspace-utility" role="dialog" aria-modal="true" aria-labelledby="utility-title">
+      <details id="utility-drawer" class="utility-drawer" role="dialog" aria-modal="true" aria-labelledby="utility-title">
         <summary>
-          <span id="utility-title">文件管理与传输设置</span>
-          <small>管理 iPhone 共享箱、队列和高级选项</small>
+          <span id="utility-title">设置</span>
           <button id="btn-close-utility" class="btn small" type="button">完成</button>
         </summary>
 
         <div class="utility-content">
-          <section class="utility-card transfer-settings-card">
-            <div class="utility-head">
-              <div>
-                <h2 id="transfer-title">手机照片，直接保存到电脑</h2>
-                <p id="direction-copy" class="subtle">文件会直接写入电脑保存位置。</p>
-              </div>
-              <div class="seg" id="seg-dir" role="group" aria-label="传输方向">
-                <input type="radio" name="dir" id="dir-pc" value="downloads" />
-                <label for="dir-pc">到电脑</label>
-                <input type="radio" name="dir" id="dir-iphone" value="outbox" />
-                <label for="dir-iphone">到 iPhone</label>
-              </div>
-            </div>
+          <section class="utility-card">
+            <h2>传输</h2>
             <div class="option-row">
-              <label class="host-only"><input type="checkbox" id="chk-notify" /> 收到文件时桌面提醒</label>
-              <label><input type="checkbox" id="chk-open" /> 完成后打开目录</label>
-              <label><input type="checkbox" id="chk-date-subdir" /> 按日期归档</label>
-              <label><input type="checkbox" id="chk-verify" /> SHA-256 校验</label>
+              <label class="host-only"><input type="checkbox" id="chk-notify" /> 收到文件时在电脑上弹出提醒</label>
+              <label><input type="checkbox" id="chk-open" /> 传完后在电脑上打开文件夹</label>
+              <label><input type="checkbox" id="chk-date-subdir" /> 按拍摄日期分文件夹保存</label>
+              <label><input type="checkbox" id="chk-verify" /> 传完检查文件是否完整（会慢一些）</label>
             </div>
           </section>
 
-          <section class="utility-card file-section outbox-section">
-            <div class="section-head">
-              <div>
-                <h2>iPhone 共享箱</h2>
-                <p class="subtle label-host">放进这里的文件，iPhone 打开 CrossSync 就能下载。</p>
-                <p class="subtle label-phone">电脑发来的文件。照片和视频点“存到相册”，在弹出的面板里选“存储图像”或“保存视频”；其他文件点文件名下载到“文件”App。</p>
-                <p id="share-https-hint" class="subtle label-phone" hidden>用 HTTPS 打开 CrossSync 后，照片和视频可以直接存进相册。</p>
-              </div>
-              <div class="toolbar">
-                <button id="btn-outbox-add" class="btn small primary host-only" type="button">添加要发给 iPhone 的文件</button>
-                <button id="btn-open-outbox" class="icon-btn" type="button" title="打开目录" aria-label="打开目录"><img src="/static/icons/tabler/folder-open.svg" alt="" /><span class="mobile-action-label">打开目录</span></button>
-                <button id="btn-refresh-outbox" class="icon-btn" type="button" title="刷新" aria-label="刷新"><img src="/static/icons/tabler/refresh.svg" alt="" /><span class="mobile-action-label">刷新</span></button>
-                <button id="btn-photos-ob-selected" class="btn small primary" type="button" disabled hidden>选中的存到相册</button>
-                <button id="btn-download-ob-selected" class="btn small" type="button" disabled>下载选中</button>
-                <button id="btn-del-ob-selected" class="btn small danger" type="button" disabled>删除选中（进回收站）</button>
-                <button id="btn-download-ob-all" class="btn small" type="button" disabled>下载全部</button>
-                <details id="more-actions-ob" class="more-actions">
-                  <summary class="btn small ghost">更多</summary>
-                  <div class="more-menu">
-                    <button id="btn-selectall-ob" class="btn small" type="button">全选</button>
-                    <button id="btn-invert-ob" class="btn small" type="button">反选</button>
-                    <button id="btn-selectnone-ob" class="btn small ghost" type="button">取消选择</button>
-                    <button id="btn-clear-ob" class="btn small danger host-only" type="button" disabled title="只处理 CrossSync 传入的文件">清空已传入文件</button>
-                  </div>
-                </details>
-              </div>
-            </div>
-            <div class="selbar" id="selbar-ob" hidden>
-              <span>已选 <strong id="selcount-ob">0</strong></span><div class="grow"></div>
-              <button id="btn-ob-del-quick" class="btn small danger" type="button">删除</button>
-              <button id="btn-ob-cancel-sel" class="btn small ghost" type="button">取消</button>
-            </div>
-            <div id="outbox-list" class="file-list"></div>
+          <section class="utility-card remote-only">
+            <h2>连接</h2>
+            <p id="security-badge" class="connection-state"><strong>正在检查连接</strong></p>
+            <p id="security-copy" class="subtle">文件只在你的局域网里传输，不经过任何服务器。</p>
+            <a id="ca-download" class="btn small" href="/ca.crt" hidden>安装证书，开启加密连接</a>
           </section>
         </div>
       </details>
