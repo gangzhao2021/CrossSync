@@ -74,7 +74,8 @@ def identify(request: Request) -> tuple:
 def describe(user_agent: str) -> str:
     """A short, recognisable name for the approval prompt."""
     agent = user_agent or ""
-    if "CrossSyncMobile" in agent:
+    # The iPhone app's requests say "CrossSync/<build> CFNetwork/...".
+    if "CrossSyncMobile" in agent or (agent.startswith("CrossSync/") and "CFNetwork" in agent):
         return "iPhone 上的 CrossSync App"
     if "Shortcuts" in agent or "WorkflowKit" in agent:
         return "iPhone 快捷指令"

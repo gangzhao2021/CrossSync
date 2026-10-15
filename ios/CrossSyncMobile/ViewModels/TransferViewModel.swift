@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -18,6 +19,9 @@ final class TransferViewModel: ObservableObject {
     @Published private(set) var speedBytesPerSecond = 0.0
     @Published private(set) var summary: TransferSummary = .empty
     @Published private(set) var errorMessage = ""
+    @Published private(set) var autoBackup = AutoBackupSettings.load()
+    @Published private(set) var backupPendingCount: Int?
+    @Published private(set) var isBackingUp = false
 
     @Published var baseURLString: String {
         didSet {
@@ -68,6 +72,143 @@ final class TransferViewModel: ObservableObject {
         }
     }
 
+    // MARK: Automatic backup
+
+    func setAutoBackupEnabled(_ enabled: Bool) {
+        var settings = autoBackup
+        if enabled && !settings.enabled {
+            settings.startDate = Date()  // "New photos" means from now on.
+        }
+        settings.enabled = enabled
+        updateAutoBackup(settings)
+        if enabled {
+            Task {
+                _ = await AutoBackupService.requestAccess()
+                refreshBackupStatus()
+            }
+        }
+    }
+
+    func setBackupIncludesExisting(_ include: Bool) {
+        var settings = autoBackup
+        settings.includeExisting = include
+        updateAutoBackup(settings)
+    }
+
+    func setBackupAlbums(_ identifiers: [String]) {
+        var settings = autoBackup
+        settings.albumIdentifiers = identifiers
+        updateAutoBackup(settings)
+    }
+
+    func refreshBackupStatus() {
+        guard autoBackup.enabled, AutoBackupService.isAuthorized else {
+            backupPendingCount = nil
+            return
+        }
+        backupPendingCount = AutoBackupService.pendingAssets(settings: autoBackup, backedUp: BackupLedger.shared.snapshot).count
+    }
+
+    /// Back up new photos when the app opens; does nothing while another transfer runs.
+    func startAutoBackupIfNeeded() {
+        // Checked and set synchronously: opening the app can ask twice in a row.
+        guard autoBackup.enabled, isConnected, !phase.isBusy, !isBackingUp, AutoBackupService.isAuthorized else { return }
+        let assets = AutoBackupService.pendingAssets(settings: autoBackup, backedUp: BackupLedger.shared.snapshot)
+        backupPendingCount = assets.count
+        guard !assets.isEmpty else { return }
+        isBackingUp = true
+        // Picking photos by hand cancels this task (see start(items:)).
+        transferTask = Task { [weak self] in
+            await self?.runBackup(assets)
+        }
+    }
+
+    private func updateAutoBackup(_ settings: AutoBackupSettings) {
+        autoBackup = settings
+        settings.save()
+        refreshBackupStatus()
+    }
+
+    private func runBackup(_ assets: [PHAsset]) async {
+        guard let url = normalizedBaseURL else {
+            isBackingUp = false
+            return
+        }
+        resetProgress()
+        errorMessage = ""
+        phase = .uploading
+        totalItems = assets.count
+        updateIdleTimer()
+        let service = ChunkedUploadService(api: makeAPI(baseURL: url))
+        uploadService = service
+        var photos = 0
+        var videos = 0
+        var failedNames: [String] = []
+        var failuresInARow = 0
+        defer {
+            uploadService = nil
+            isBackingUp = false
+            updateIdleTimer()
+            refreshBackupStatus()
+        }
+
+        for asset in assets {
+            if Task.isCancelled { break }
+            var exported: [PreparedAsset] = []
+            do {
+                exported = try await AutoBackupService.export(asset)
+                for file in exported {
+                    try Task.checkCancellation()
+                    currentFileName = file.name
+                    currentFileProgress = 0
+                    let startedAt = Date()
+                    _ = try await service.upload(asset: file) { [weak self] sent, total in
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            self.currentFileProgress = total > 0 ? Double(sent) / Double(total) : 0
+                            self.speedBytesPerSecond = Double(sent) / max(Date().timeIntervalSince(startedAt), 0.1)
+                        }
+                    }
+                }
+                BackupLedger.shared.markBackedUp(asset.localIdentifier)
+                uploadedItems += 1
+                if asset.mediaType == .video { videos += 1 } else { photos += 1 }
+                failuresInARow = 0
+            } catch is CancellationError {
+                PhotoPreparationService.cleanup(exported)
+                break
+            } catch let error as URLError where error.code == .cancelled {
+                PhotoPreparationService.cleanup(exported)
+                break
+            } catch {
+                failedNames.append(exported.first?.name ?? "一项")
+                failedItems += 1
+                failuresInARow += 1
+                if failuresInARow >= 3 {
+                    // Probably the computer went away; try again next time the app opens.
+                    PhotoPreparationService.cleanup(exported)
+                    errorMessage = "自动备份暂停了：\(error.localizedDescription)"
+                    break
+                }
+            }
+            PhotoPreparationService.cleanup(exported)
+        }
+
+        summary = TransferSummary(
+            total: uploadedItems + failedNames.count,
+            photos: photos,
+            videos: videos,
+            failed: failedNames.count,
+            destination: serverConfig?.downloadsDirectory ?? "电脑接收区"
+        )
+        if uploadedItems == 0 && !failedNames.isEmpty {
+            if errorMessage.isEmpty { errorMessage = "自动备份没能完成，下次打开 App 时会再试。" }
+            phase = .failed
+        } else {
+            phase = uploadedItems > 0 ? .complete : .ready
+        }
+    }
+
     func refreshConnection() async {
         guard let url = normalizedBaseURL else {
             serverConfig = nil
@@ -82,6 +223,7 @@ final class TransferViewModel: ObservableObject {
         do {
             serverConfig = try await makeAPI(baseURL: url).fetchConfig()
             connectionError = nil
+            startAutoBackupIfNeeded()
         } catch {
             serverConfig = nil
             connectionError = error.localizedDescription
@@ -110,12 +252,15 @@ final class TransferViewModel: ObservableObject {
 
     func reset() {
         cancel(resetToReady: true)
+        isBackingUp = false
         summary = .empty
         errorMessage = ""
     }
 
     func applicationBecameActive() {
         updateIdleTimer()
+        refreshBackupStatus()
+        Task { await refreshConnection() }
     }
 
     private func run(items: [PhotosPickerItem]) async {

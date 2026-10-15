@@ -11,6 +11,11 @@ enum CrossSyncAPIError: LocalizedError {
             return "电脑地址无效。请填写类似 https://192.168.2.14:8008 的地址。"
         case .invalidResponse:
             return "电脑返回了无法识别的响应。"
+        case .server(403, let message) where message.contains("允许") || message.contains("拒绝"):
+            // New devices must be allowed on the computer first.
+            return message.contains("拒绝")
+                ? "电脑拒绝了这台 iPhone。请在电脑上的 CrossSync 设置里处理后再试。"
+                : "请在电脑上的 CrossSync 页面点“允许”，然后再试一次。"
         case .server(let status, let message):
             return "电脑端错误（\(status)）：\(message)"
         }
@@ -119,6 +124,8 @@ final class CrossSyncAPI: @unchecked Sendable {
 
     private func applyAuthentication(to request: inout URLRequest) {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        // Lets the computer remember this iPhone once it has been allowed.
+        request.setValue(clientID, forHTTPHeaderField: "X-CrossSync-Device")
     }
 
     private func makeURL(path: String, queryItems: [URLQueryItem] = []) throws -> URL {

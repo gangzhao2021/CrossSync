@@ -93,6 +93,7 @@ class DeviceApprovalTests(unittest.TestCase):
             BROWSER["User-Agent"]: "iPhone · Safari",
             "Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile Safari/537.36": "安卓手机 · Chrome",
             "CrossSyncMobile/1 CFNetwork/1568 Darwin/24.0.0": "iPhone 上的 CrossSync App",
+            "CrossSync/7 CFNetwork/1568.100.1 Darwin/24.0.0": "iPhone 上的 CrossSync App",
             "": "未知设备",
         }
         for agent, name in cases.items():

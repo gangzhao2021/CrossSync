@@ -874,10 +874,45 @@ private struct ServerSettingsView: View {
                     }
                 }
                 Section {
-                    Text("iPhone 与电脑需在同一 Wi‑Fi。使用 HTTPS 时，需先在 iPhone 安装并信任 CrossSync 的本地 CA 证书。")
+                    Toggle("打开 App 时自动备份新照片", isOn: Binding(
+                        get: { model.autoBackup.enabled },
+                        set: { model.setAutoBackupEnabled($0) }
+                    ))
+                    if model.autoBackup.enabled {
+                        Toggle("也备份以前的照片", isOn: Binding(
+                            get: { model.autoBackup.includeExisting },
+                            set: { model.setBackupIncludesExisting($0) }
+                        ))
+                        NavigationLink {
+                            BackupAlbumsView()
+                                .environmentObject(model)
+                        } label: {
+                            LabeledContent(
+                                "备份范围",
+                                value: model.autoBackup.albumIdentifiers.isEmpty
+                                    ? "所有照片" : "\(model.autoBackup.albumIdentifiers.count) 个相册"
+                            )
+                        }
+                        if let pending = model.backupPendingCount {
+                            LabeledContent("等待备份", value: "\(pending) 项")
+                        }
+                        Button("立即备份") {
+                            model.startAutoBackupIfNeeded()
+                            dismiss()
+                        }
+                        .disabled(!model.isConnected || model.phase.isBusy || (model.backupPendingCount ?? 0) == 0)
+                    }
+                } header: {
+                    Text("自动备份")
+                } footer: {
+                    Text("打开 CrossSync 并和电脑连在同一 Wi‑Fi 时，自动把新拍的照片和视频（含实况照片的视频）传到电脑。已经传过的不会重复传。切到后台时，已经开始的部分会继续传完。")
+                }
+                Section {
+                    Text("iPhone 与电脑需在同一 Wi‑Fi。使用 HTTPS 时，需先在 iPhone 安装并信任 CrossSync 的本地 CA 证书。第一次连接时，需要在电脑上的 CrossSync 页面点“允许”。")
                         .font(.footnote)
                 }
             }
+            .onAppear { model.refreshBackupStatus() }
             .navigationTitle("连接电脑")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -886,5 +921,68 @@ private struct ServerSettingsView: View {
                 }
             }
         }
+    }
+}
+
+private struct BackupAlbumsView: View {
+    @EnvironmentObject private var model: TransferViewModel
+    @State private var albums: [AutoBackupService.Album] = []
+
+    var body: some View {
+        List {
+            Section {
+                Button {
+                    model.setBackupAlbums([])
+                } label: {
+                    row(title: "所有照片", detail: nil, selected: model.autoBackup.albumIdentifiers.isEmpty)
+                }
+            }
+            if !albums.isEmpty {
+                Section("只备份这些相册") {
+                    ForEach(albums) { album in
+                        Button {
+                            toggle(album.id)
+                        } label: {
+                            row(title: album.title, detail: "\(album.count)",
+                                selected: model.autoBackup.albumIdentifiers.contains(album.id))
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("备份范围")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            if await AutoBackupService.requestAccess() {
+                albums = AutoBackupService.albums()
+            }
+        }
+    }
+
+    private func row(title: String, detail: String?, selected: Bool) -> some View {
+        HStack {
+            Text(title)
+                .foregroundStyle(.primary)
+            Spacer()
+            if let detail {
+                Text(detail)
+                    .foregroundStyle(.secondary)
+            }
+            if selected {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func toggle(_ identifier: String) {
+        var selected = model.autoBackup.albumIdentifiers
+        if let index = selected.firstIndex(of: identifier) {
+            selected.remove(at: index)
+        } else {
+            selected.append(identifier)
+        }
+        model.setBackupAlbums(selected)
     }
 }

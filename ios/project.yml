@@ -25,7 +25,7 @@ targets:
         CFBundleName: CrossSync
         LSRequiresIPhoneOS: true
         NSLocalNetworkUsageDescription: CrossSync 需要访问本地网络，将照片直接发送到你的电脑。
-        NSPhotoLibraryUsageDescription: CrossSync 仅访问你选择的照片和视频，并将原文件发送到你的电脑。
+        NSPhotoLibraryUsageDescription: CrossSync 读取你选择的照片和视频（开启自动备份后也会读取新拍的照片），并把原文件发送到你的电脑。
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UILaunchScreen: {}
