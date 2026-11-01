@@ -38,7 +38,7 @@ jobs:
           }
           Stop-Process -Id $app.Id -Force
           if (-not $ok) { throw 'CrossSync.exe did not start' }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: CrossSync-windows
           path: dist/CrossSync-windows.zip
